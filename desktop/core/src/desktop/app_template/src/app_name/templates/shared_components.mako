@@ -13,30 +13,35 @@
 ## WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 ## See the License for the specific language governing permissions and
 ## limitations under the License.
-${'<%'}!
-#declare imports here, for example:
-#import datetime
+${'<%!'}
+from django.utils.translation import ugettext as _
 ${'%>'}
 
-${'<%'}!
-import datetime
-from django.template.defaultfilters import urlencode, escape
+${'<%!'}
+def is_selected(section, matcher):
+  if section == matcher:
+    return "active"
+  else:
+    return ""
 ${'%>'}
-${'<%'}def name="header(title='${app_name}', toolbar=True)">
-  <!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
-  <html>
-    <head>
-      <title>${'$'}{title}</title>
-    </head>
-    <body>
-      ${'%'} if toolbar:
-      <div class="toolbar">
-        <a href="${'$'}{url('${app_name}.views.index')}"><img src="/${app_name}/static/art/${app_name}.png" class="${app_name}_icon"/></a>
+
+${'<%'}def name="menubar(section='')">
+  <div class="navbar hue-title-bar nokids">
+    <div class="navbar-inner">
+      <div class="container-fluid">
+        <div class="nav-collapse">
+          <ul class="nav">
+            <li class="app-header">
+              <a href="/${app_name}">
+                <img src="${"${"} static('${app_name}/art/icon_${app_name}_48.png') }" class="app-icon"  alt="${"${"} _('App icon') }"/>
+                ${" ".join(word.capitalize() for word in app_name.split("_"))}
+              </a>
+             </li>
+             <li class="${'$'}{is_selected(section, 'mytab')}"><a href="#">Tab 1</a></li>
+             <li class="${'$'}{is_selected(section, 'mytab2')}"><a href="#">Tab 2</a></li>
+          </ul>
+        </div>
       </div>
-      ${'%'} endif
-${'<'}/%def>
-
-${'<%'}def name="footer()">
-    </body>
-  </html>
-${'<'}/%def>
+    </div>
+  </div>
+${'</%'}def>

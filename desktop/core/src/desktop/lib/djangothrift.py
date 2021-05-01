@@ -34,17 +34,18 @@
 # This is frustrating visually, since the JSON ends up double-quoted.
 # It also means that you have to dirty your object with an extra __unicode__
 # field.  You can do it, like so:
-#   tft.__unicode__ = lambda: simplejson.dumps(thrift_util.thrift2json(tft))
+#   tft.__unicode__ = lambda: json.dumps(thrift_util.thrift2json(tft))
 # but then your field is no longer equal to a Thrift object that hasn't
 # been through this dirtying, and that's bad.
 # So, don't use JSON serialization, and use XML serialization instead.
 
-import simplejson
+from __future__ import absolute_import
+from past.builtins import basestring
+import json
 
-import thrift_util
+from . import thrift_util
 
 from django.db import models
-from south.modelsinspector import add_introspection_rules
 
 class ThriftField(models.TextField):
   """
@@ -56,7 +57,6 @@ class ThriftField(models.TextField):
   An alternative approach is to store the bytes, but the
   JSON representation is nicer for loading up readable initial data.
   """
-  __metaclass__ = models.SubfieldBase
 
   def __init__(self, thrift_class, *args, **kwargs):
     self.thrift_class = thrift_class
@@ -69,32 +69,18 @@ class ThriftField(models.TextField):
     if not isinstance(value, basestring): 
       return value
 
-    jsonable = simplejson.loads(value)
+    jsonable = json.loads(value)
     tft = thrift_util.jsonable2thrift(jsonable, self.thrift_class)
     return tft
 
-  def get_db_prep_save(self, value):
+  def get_db_prep_save(self, value, *args, **kwargs):
     if value is None: 
       return None
     jsonable = thrift_util.thrift2json(value)
-    json = simplejson.dumps(jsonable)
-    return json
+    return json.dumps(jsonable)
 
   def value_to_string(self, obj):
     """
     Used by XML serialization.
     """
-    return simplejson.dumps(thrift_util.thrift2json(self._get_val_from_obj(obj)))
-
-
-# See http://south.aeracode.org/docs/customfields.html#extending-introspection
-_rules = [
-  (
-    (ThriftField,),
-    [],
-    {
-      "thrift_class": [ "thrift_class", {} ],
-    }
-  )
-]
-add_introspection_rules(_rules, ["^desktop\.lib\.djangothrift\.ThriftField"])
+    return json.dumps(thrift_util.thrift2json(self._get_val_from_obj(obj)))

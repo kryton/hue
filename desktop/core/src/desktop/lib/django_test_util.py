@@ -14,17 +14,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""
-Common utilities for testing Desktop django apps.
-"""
+
+import logging
+import re
+import json
 
 import django.test.client
-import simplejson
-from django.contrib.auth.models import User, Group
-
-import re
 import nose.tools
-import logging
+
+from useradmin.models import User, Group, Organization
+
+from desktop.conf import ENABLE_ORGANIZATIONS
+
 
 class Client(django.test.client.Client):
   """
@@ -32,7 +33,8 @@ class Client(django.test.client.Client):
   """
   def get_json(self, *args, **kwargs):
     response = self.get(*args, **kwargs)
-    return simplejson.JSONDecoder().decode(response.content)
+    return json.JSONDecoder().decode(response.content)
+
 
 def assert_ok_response(response):
   """
@@ -40,31 +42,52 @@ def assert_ok_response(response):
 
   Returns the response.
   """
-  assert_true(200, response.status_code)
-  return reponse
+  nose.tools.assert_true(200, response.status_code)
+  return response
 
-def make_logged_in_client(username="test", password="test", is_superuser=True, recreate=False):
+
+def make_logged_in_client(username="test", password="test", is_superuser=True, recreate=False, groupname=None, is_admin=False):
   """
   Create a client with a user already logged in.
 
-  Sometimes we recreate the user, because some tests like to
-  mess with is_active and such.
+  Sometimes we recreate the user, because some tests like to mess with is_active and such.
+  Note: could be combined with backend.create_user and other standart utils.
   """
   try:
     user = User.objects.get(username=username)
     if recreate:
       user.delete()
       raise User.DoesNotExist
-  except User.DoesNotExist:    
-    user = User.objects.create_user(username, username + '@localhost', password)
+  except User.DoesNotExist:
+    user = User.objects.create_user(username=username, password=password)
     user.is_superuser = is_superuser
+    if ENABLE_ORGANIZATIONS.get():
+      user.is_admin = is_admin
+    else:
+      user.is_superuser = user.is_superuser or is_admin
     user.save()
+  else:
+    if user.is_superuser != is_superuser:
+      user.is_superuser = is_superuser
+      user.save()
+
+  if groupname is not None:
+    attributes = {'name': groupname}
+
+    if ENABLE_ORGANIZATIONS.get():
+      attributes['organization'] = user.organization
+
+    group, created = Group.objects.get_or_create(**attributes)
+    if not user.groups.filter(**attributes).exists():
+      user.groups.add(group)
+      user.save()
 
   c = Client()
   ret = c.login(username=username, password=password)
 
   assert ret, "Login failed (user '%s')." % username
   return c
+
 
 _MULTI_WHITESPACE = re.compile("\s+", flags=re.MULTILINE)
 
@@ -74,12 +97,12 @@ def compact_whitespace(s):
   Also removes leading and trailing whitespce.
   """
   return _MULTI_WHITESPACE.sub(" ", s).strip()
-  
+
 def assert_equal_mod_whitespace(first, second, msg=None):
   """
   Asserts that two strings are equal, ignoring whitespace.
   """
-  nose.tools.assert_equal(compact_whitespace(first), 
+  nose.tools.assert_equal(compact_whitespace(first),
     compact_whitespace(second), msg)
 
 def assert_similar_pages(first, second, ratio=0.9, msg=None):
@@ -87,8 +110,8 @@ def assert_similar_pages(first, second, ratio=0.9, msg=None):
   Asserts that most of the lines (90% by default) in the two pages are identical,
   ignoring leading/trailing spaces.
   """
-  lines_a = set([ l.strip() for l in first.split('\n') ])
-  lines_b = set([ l.strip() for l in second.split('\n') ])
+  lines_a = set([l.strip() for l in first.split('\n')])
+  lines_b = set([l.strip() for l in second.split('\n')])
   common = lines_a.intersection(lines_b)
   similarity = 1.0 * len(common) / max(len(lines_a), len(lines_b))
   nose.tools.assert_true(similarity >= ratio, msg)
@@ -104,29 +127,16 @@ def configure_django_for_test():
   # This must be run before importing models
   # Be sure not to include any INSTALLED_APPS, since then the models
   # code will try very hard to load it.
-  settings.configure(DATABASE_ENGINE="sqlite3", DATABASE_NAME=":memory:",
-    INSTALLED_APPS=())
+  settings.configure(DATABASE_ENGINE="sqlite3", DATABASE_NAME=":memory:", INSTALLED_APPS=())
 
 
 def create_tables(model):
   """ Create all tables for the given model.
 
-  This is a subset of django.core.management.commands.syncdb
+  This is a subset of django.core.management.commands.migrate
   """
-  from django.core.management import sql
   from django.db import connection
-  from django.core.management.color import no_style
+  from django.db.models import Model
 
-  cursor = connection.cursor()
-  def execute(statements):
-    for statement in statements:
-      logging.debug("Executing: " + statement)
-      cursor.execute(statement)
-
-  STYLE = no_style()
-  execute(connection.creation.sql_create_model(model, STYLE)[0])
-  execute(connection.creation.sql_indexes_for_model(model, STYLE))
-  # Skipping custom sql and many-to-many, since those rely on 
-  # loading the app modules.
-  # execute(sql.custom_sql_for_model(model, STYLE))
-  # execute(connection.creation.sql_for_many_to_many(model, STYLE))
+  with connection.schema_editor() as editor:
+    editor.create_model(model)

@@ -23,14 +23,17 @@
 # to create links (within the application) to trusted
 # URLs, by appending an HMAC to the parameters.
 
+from future import standard_library
+standard_library.install_aliases()
+from builtins import str
 import logging
 import re
-from urllib2 import urlopen
-from urlparse import urlparse, urlunparse
+from urllib.request import Request, urlopen
+from urllib.parse import urlencode, urlparse, urlunparse
 
 from django.core import urlresolvers
 from django.http import HttpResponse
-from desktop.lib.django_util import MessageException
+from desktop.lib.exceptions import MessageException
 
 from proxy import conf
 
@@ -49,6 +52,29 @@ def check_host_port(host, port):
 
   return False
 
+def check_blacklist(host, port, path):
+  """
+  Return true if this host:port path combo is allowed to be proxied.
+  """
+  blacklist = conf.BLACKLIST.get()
+  if not blacklist:
+    return True
+
+  # Make a canonical path, since "/forbidden//path" (string) does not match
+  # "/forbidden/path" (regex).
+  has_trailing_slash = path.endswith('/')
+  path_elems = path.split('/')
+  path_elems = [ p for p in path_elems if p ]
+  canon_url = "%s:%s/%s" % (host, port, '/'.join(path_elems))
+  if has_trailing_slash:
+    canon_url += '/'
+
+  for regexp in blacklist:
+    if regexp.match(canon_url):
+      return False
+  return True
+
+
 def proxy(request, host, port, path):
   """
   Proxies an HTTP request by fetching the data
@@ -60,27 +86,31 @@ def proxy(request, host, port, path):
     raise MessageException(
       ("%s:%d is not whitelisted for reverse proxying, nor a daemon that Cluster Health " +
        "is aware of.  Contact your administrator.") % (host, port))
+  if not check_blacklist(host, port, path):
+    raise MessageException(
+      "Access to %s:%s%s is blocked. Contact your administrator." % (host, port, path))
 
   # The tuple here is: (scheme, netloc, path, params, query, fragment).
   # We don't support params or fragment.
-  url = urlunparse(("http", "%s:%d" % (host,port), 
+  url = urlunparse((u'http', "%s:%d" % (host,port),
                     path, 
                     None, 
-                    request.META.get("QUERY_STRING"), 
+                    str(request.META.get("QUERY_STRING")),
                     None))
   LOGGER.info("Retrieving %s." % url)
   if request.method == 'POST':
-    post_data = request.POST.urlencode()
+    post_data = urlencode(dict(zip(request.POST.keys(), request.POST.values()))).encode('ascii')
   else:
     post_data = None
-  data = urlopen(url, data=post_data)
+  req = Request(url, data=post_data)
+  data = urlopen(req)
   content_type = data.headers.get("content-type", "text/plain")
   if not re.match(r'^text/html\s*(?:;.*)?$', content_type):
     resp_text = data.read(1024*1024) # read 1MB
   else:
     resp_text = _rewrite_links(data)
   request.path = _reverse(host, port, path)
-  return HttpResponse(resp_text, mimetype=data.headers.get("content-type"))
+  return HttpResponse(resp_text, content_type=data.headers.get("content-type"))
 
 def _reverse(host, port, path):
   return urlresolvers.reverse("proxy.views.proxy",
@@ -101,7 +131,7 @@ def _rewrite_url(url):
   try:
     # We may hit invalid urls. Return None to strip out the link entirely.
     out = _reverse(host, port, path)
-  except urlresolvers.NoReverseMatch, ex:
+  except urlresolvers.NoReverseMatch as ex:
     LOGGER.error("Encountered malformed URL '%s' when rewriting proxied page." % (url,))
     return None
 

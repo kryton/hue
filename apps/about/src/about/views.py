@@ -15,9 +15,52 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from desktop.lib.django_util import render
-from django.conf import settings
+from builtins import str
+import json
+import logging
 
-def index(request):
-  return render('index.mako', request,
-    dict(version=settings.HUE_DESKTOP_VERSION))
+from django.utils.translation import ugettext as _
+
+from desktop import appmanager
+from desktop.auth.backend import is_hue_admin
+from desktop.auth.decorators import admin_required
+from desktop.lib.django_util import JsonResponse, render, login_notrequired
+from desktop.log.access import access_log_level
+from desktop.models import Settings, hue_version
+from desktop.views import collect_usage
+
+
+def admin_wizard(request):
+  if is_hue_admin(request.user):
+    apps = appmanager.get_apps(request.user)
+  else:
+    apps = []
+  app_names = [app.name for app in sorted(apps, key=lambda app: app.menu_index)]
+
+  return render('admin_wizard.mako', request, {
+      'version': hue_version(),
+      'apps': dict([(app.name, app) for app in apps]),
+      'app_names': app_names,
+      'is_embeddable': request.GET.get('is_embeddable', False),
+      'collect_usage': collect_usage(),
+  })
+
+
+@admin_required
+def update_preferences(request):
+  response = {'status': -1, 'data': ''}
+
+  if request.method == 'POST':
+    try:
+      settings = Settings.get_settings()
+      settings.collect_usage = request.POST.get('collect_usage', 'False').lower() == "true"
+      settings.save()
+
+      response['status'] = 0
+      response['collect_usage'] = settings.collect_usage
+    except Exception as e:
+      response['data'] = str(e)
+  else:
+    response['data'] = _('POST request required.')
+
+  return JsonResponse(response)

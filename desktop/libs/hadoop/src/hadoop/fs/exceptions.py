@@ -15,11 +15,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from desktop.lib.django_util import StructuredException
+import json
+import logging
+
+from desktop.lib.exceptions import StructuredException
+from desktop.lib.rest.http_client import RestException
+
+
+LOG = logging.getLogger(__name__)
+
 
 class PermissionDeniedException(StructuredException):
   def __init__(self, msg, orig_exc=None):
-    # TODO(todd) use orig_exc for something fun
-    StructuredException.__init__(self,
-      "PERMISSION_DENIED",
-      msg)
+    StructuredException.__init__(self,  "PERMISSION_DENIED", msg)
+
+
+class WebHdfsException(RestException):
+  def __init__(self, error):
+    RestException.__init__(self, error)
+    self.server_exc = None
+
+    try:
+      json_body = json.loads(self._message)
+    except ValueError:
+      pass
+    else:
+      remote_exception = json_body.get('RemoteException', {})
+      exception = remote_exception.get('exception')
+      message = remote_exception.get('message', '')
+
+      if exception:
+        self.server_exc = exception
+        self._message = "%s: %s" % (self.server_exc, message)

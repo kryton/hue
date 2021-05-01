@@ -15,8 +15,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import division
 import datetime
 import django
+import math
+
+from django.utils.translation import ugettext as _
 
 register = django.template.Library()
 
@@ -24,8 +28,8 @@ register = django.template.Library()
 def unix_ms_to_datetime(unixtime):
   """unixtime is seconds since the epoch"""
   if unixtime:
-    return datetime.datetime.fromtimestamp(unixtime/1000)
-  return "No time"
+    return datetime.datetime.fromtimestamp(math.floor(unixtime / 1000))
+  return _("No time")
 unix_ms_to_datetime.is_safe = True
 
 

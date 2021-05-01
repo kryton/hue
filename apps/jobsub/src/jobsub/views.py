@@ -14,6 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """
 Views for JobSubmission.
 
@@ -23,303 +24,268 @@ To "run" the job design, it must be parameterized, and submitted
 to the cluster.  A parameterized, submitted job design
 is a "job submission".  Submissions can be "watched".
 """
-from django.http import HttpResponse
-from django.contrib.auth.models import User
-from django import forms
-from django.core import urlresolvers
-from django.db.models import Q
 
-from desktop.views import register_status_bar_view
-from desktop.lib import thrift_util
-from desktop.lib.django_util import render, MessageException, format_preserving_redirect
+from builtins import str
+import logging
+import time as py_time
+
+from django.utils.translation import ugettext as _
+
+from desktop import appmanager
+from desktop.lib.django_util import render, render_json
+from desktop.lib.exceptions import StructuredException
+from desktop.lib.exceptions_renderable import PopupException
 from desktop.log.access import access_warn
+from desktop.models import Document
 
-from jobsub.management.commands import jobsub_setup
-from jobsub import conf
-from jobsub.forms import interface
-from jobsub.models import JobDesign, Submission
-from jobsubd.ttypes import SubmissionPlan
-from jobsubd import JobSubmissionService
-from jobsubd.ttypes import State
+from oozie.models import Workflow
+from oozie.forms import design_form_by_type
+from oozie.utils import model_to_dict, format_dict_field_values,\
+                        sanitize_node_dict
 
-JOBSUB_THRIFT_TIMEOUT_SECS=5
+from desktop.auth.backend import is_admin
 
-class MetadataForm(forms.Form):
-  name = forms.CharField(required=True, initial="Untitled", help_text="Name of Job Design")
-  description = forms.CharField(required=False, initial="", help_text="Description of Job Design", widget=forms.Textarea)
+LOG = logging.getLogger(__name__)
+MAX_DESIGNS = 250
 
-def edit_design(request, id=None, type=None, force_get=False, clone_design=None):
+
+def _list_designs(request, owner, name, order_by='-last_modified'):
   """
-  Edits a job submission.
-
-  This method has high-ish cyclomatic complexity, in large part,
-  because, when handling web forms, validation errors
-  on submit receive very similar treatment to a request
-  for the form itself.
-
-  This method does double-duty for "new" as well.
+  Fetch all workflow designs.
+  parameters:
+    owner       - Substring filter by owner field
+    name        - Substring filter by design name field
+    order_by    - Order by string in django ORM format
+    is_trashed  - Boolean filter for trash or available
   """
-  assert id or type
+  data = Document.objects.get_docs(request.user, Workflow, extra='jobsub')
 
-  message=request.GET.get("message")
+  if owner:
+      data = data.filter(owner__username__icontains=owner)
+  if name:
+      data = data.filter(name__icontains=name)
+  data = data.order_by(order_by)
 
-  if type:
-    new = True
-    jd = JobDesign()
-    form_type = interface.registry.get(type)
-    edit_url = urlresolvers.reverse("jobsub.new", kwargs=dict(type=type))
-    if form_type is None:
-      raise MessageException("Type %s does not exist." % repr(type))
+  designs = []
+  for doc in data[:MAX_DESIGNS]:
+    design = doc.content_object
+
+    if design is not None:
+      ko_design = {
+       'id': design.id,
+       'owner': design.owner.username,
+       # Design name is validated by workflow and node forms.
+       'name': design.name,
+       'description': design.description,
+       'node_type': design.start.get_child('to').node_type,
+       'last_modified': py_time.mktime(design.last_modified.timetuple()),
+       'editable': design.owner.id == request.user.id,
+       'is_shared': design.is_shared,
+       'is_trashed': doc.is_trashed()
+      }
+      designs.append(ko_design)
+
+  return designs
+
+
+def list_designs(request):
+  '''
+  List all workflow designs. Result sorted by last modification time.
+  Query params:
+    owner       - Substring filter by owner field
+    name        - Substring filter by design name field
+  '''
+  owner = request.GET.get('owner', '')
+  name = request.GET.get('name', '')
+
+  if request.is_ajax():
+    return render_json({
+      'designs': _list_designs(request, owner, name)
+    }, js_safe=True)
   else:
-    new = False
-    jd = JobDesign.objects.get(pk=id)
-    edit_url = jd.edit_url()
-    form_type = interface.registry.get(jd.type)
-    if form_type is None:
-      raise MessageException("Could not find form type for %s." % str(jd))
-    if jd.owner != request.user:
-      access_warn(request, 'Insufficient permission')
-      raise MessageException("Permission Denied.  You are not the owner of this JobDesign.  "
-                             "You may copy the design instead.")
-
-  if not force_get and request.method == 'POST':
-    metadata_form = MetadataForm(request.POST)
-    form = form_type()
-    if metadata_form.is_valid() and form.is_valid_edit(request.POST):
-      message = _save_design(request, jd, metadata_form, form)
-      if request.POST.get("save_submit") == "on":
-        return submit_design(request, jd.id, force_get=True)
-      else:
-        return list_designs(request, saved=jd.id)
-  else:
-    if new:
-      metadata_form = MetadataForm()
-      if clone_design:
-        form = form_type(string_repr=clone_design.data)
-        metadata_form.initial["name"] = "Copy of %s" % clone_design.name
-        metadata_form.initial["description"] = clone_design.description
-      else:
-        form = form_type()
-    else:
-      form = form_type(string_repr=jd.data)
-      metadata_form = MetadataForm(dict(name=jd.name, description=jd.description))
-
-  # Present edit form for failed POST requests and edits.
-  newlinks = [ (type, urlresolvers.reverse("jobsub.new", kwargs=dict(type=type))) for type in interface.registry ]
-  request.path = edit_url
-  return render("edit.html", request, {
-      'newlinks': newlinks,
-      'metadata_form': metadata_form,
-      'form': form,
-      'edit_url': edit_url,
-      'message': message
+    return render("designs.mako", request, {
+      'currentuser': request.user,
+      'owner': owner,
+      'name': name,
+      'apps': appmanager.get_apps_dict()
     })
 
-def _save_design(request, jd, metadata_form, form):
-  """
-  Helper responsible for saving the job design.
-  """
-  jd.name = metadata_form.cleaned_data["name"]
-  jd.description = metadata_form.cleaned_data["description"]
-  jd.data = form.serialize_to_string()
-  jd.owner = request.user
-  jd.type = form.name
-  jd.save()
+def not_available(request):
+  return render("not_available.mako", request, {})
 
-def list_designs(request, saved=None):
-  """
-  Lists extant job designs.
+def _get_design(user, design_id):
+  """Raise PopupException if design doesn't exist"""
+  try:
+    return Document.objects.can_read_or_exception(user, Workflow, doc_id=design_id).content_object
+  except Workflow.DoesNotExist:
+    raise PopupException(_("Workflow not found"))
 
-  Filters can be specified for owners.
 
-  Note: the URL is named "list", but since list is a built-in,
-  better to name the method somethign else.
-  """
-  show_install_examples = request.user.is_superuser and not jobsub_setup.Command().has_been_setup()
-  data = JobDesign.objects.order_by('-last_modified')
-  owner = request.GET.get("owner")
-  name = request.GET.get('name')
-  if owner:
-    try:
-      user = User.objects.get(username=owner)
-      data = data.filter(owner=user)
-    except User.DoesNotExist:
-      data = []
-  else:
-    owner = ""
+def _check_permission(request, owner_name, error_msg, allow_root=False):
+  """Raise PopupException if user doesn't have permission to modify the design"""
+  if request.user.username != owner_name:
+    if allow_root and is_admin(request.user):
+      return
+    access_warn(request, error_msg)
+    raise PopupException(_("Permission denied. You are not the owner."))
 
-  if name:
-    data = data.filter(name__icontains=name)
-  else:
-    name = ''
 
-  newlinks = [ (type, urlresolvers.reverse("jobsub.new", kwargs=dict(type=type))) for type in interface.registry ]
+def delete_design(request, design_id):
+  if request.method != 'POST':
+    raise StructuredException(code="METHOD_NOT_ALLOWED_ERROR", message=_('Must be POST request.'), error_code=405)
 
-  return render("list.html", request, {
-    'jobdesigns': list(data),
-    'currentuser':request.user,
-    'newlinks': newlinks,
-    'owner': owner,
-    'name': name,
-    'saved': saved,
-    'show_install_examples': show_install_examples,
+  skip_trash = 'skip_trash' in request.GET
+
+  try:
+    workflow = _get_design(request.user, design_id)
+    _check_permission(request, workflow.owner.username,
+                      _("Access denied: delete design %(id)s.") % {'id': design_id},
+                      allow_root=True)
+    if skip_trash:
+      Workflow.objects.destroy(workflow, request.fs)
+    else:
+      workflow.delete(skip_trash=False)
+
+  except Workflow.DoesNotExist:
+    raise StructuredException(code="NOT_FOUND", message=_('Could not find design %s.') % design_id, error_code=404)
+
+  return render_json({
+    'status': 0
   })
 
-def clone_design(request, id):
-  """
-  Clone a design.
-  """
+
+def restore_design(request, design_id):
+  if request.method != 'POST':
+    raise StructuredException(code="METHOD_NOT_ALLOWED_ERROR", message=_('Must be POST request.'), error_code=405)
+
   try:
-    jd = JobDesign.objects.get(pk=id)
-  except JobDesign.DoesNotExist:
-    raise MessageException("Design not found.")
+    workflow = _get_design(request.user, design_id)
+    _check_permission(request, workflow.owner.username,
+                      _("Access denied: delete design %(id)s.") % {'id': design_id},
+                      allow_root=True)
+    workflow.restore()
 
-  return edit_design(request, type=jd.type, clone_design=jd, force_get=True)
+  except Workflow.DoesNotExist:
+    LOG.error("Trying to restore non-existent workflow (id %s)" % (design_id,))
+    raise StructuredException(code="NOT_FOUND", message=_('Could not find design %s.') % design_id, error_code=404)
 
-def delete_design(request, id):
+  return render_json({
+    'status': 0
+  })
+
+
+def get_design(request, design_id):
+  workflow = _get_design(request.user, design_id)
+
+  node = workflow.start.get_child('to')
+  node_dict = model_to_dict(node)
+  node_dict['id'] = design_id
+  node_dict['is_shared'] = workflow.is_shared
+  node_dict['editable'] = workflow.owner.id == request.user.id
+  node_dict['parameters'] = workflow.parameters
+  node_dict['description'] = workflow.description
+
+  return render_json(node_dict, js_safe=True)
+
+
+def save_design(request, design_id):
+  workflow = _get_design(request.user, design_id)
+  _check_permission(request, workflow.owner.username, _("Access denied: edit design %(id)s.") % {'id': workflow.id})
+
+  ActionForm = design_form_by_type(request.POST.get('node_type', None), request.user, workflow)
+  form = ActionForm(request.POST)
+
+  if not form.is_valid():
+    raise StructuredException(code="INVALID_REQUEST_ERROR", message=_('Error saving design'), data={'errors': form.errors}, error_code=400)
+
+  data = format_dict_field_values(request.POST.copy())
+  _save_design(request.user, design_id, data)
+
+  return get_design(request, design_id);
+
+
+def _save_design(user, design_id, data):
+  sanitize_node_dict(data)
+  workflow = _get_design(user, design_id)
+
+  workflow.name = data['name']
+  workflow.description = data.setdefault('description', '')
+  workflow.is_shared = str(data.setdefault('is_shared', 'true')).lower() == "true"
+  workflow.parameters = data.setdefault('parameters', '[]')
+  node = workflow.start.get_child('to').get_full_node()
+  node_id = node.id
+
+  for key in data:
+    if key in ('is_shared', 'capture_output', 'propagate_configuration'):
+      setattr(node, key, str(data[key]).lower() == 'true')
+    else:
+      setattr(node, key, data[key])
+
+  node.id = node_id
+  node.pk = node_id
+  node.save()
+
+  workflow.save()
+
+  if workflow.doc.exists():
+    workflow.doc.update(name=workflow.name, description=workflow.description)
+
+
+def new_design(request, node_type):
   """
-  Design deletion.
-
-  The url provides the id, but we require a POST
-  for deletion to indicate that it's an "action".
+  Designs are the interpolation of Workflows and a single action.
+  Save ``name`` and ``description`` of workflows.
+  Also, use ``id`` of workflows.
   """
-  try:
-    jd = JobDesign.objects.get(pk=id)
-  except JobDesign.DoesNotExist:
-    return HttpResponse("Design not found.")
+  if request.method != 'POST':
+    raise StructuredException(code="METHOD_NOT_ALLOWED_ERROR", message=_('Must be POST request.'), error_code=405)
 
-  if jd.owner != request.user:
-    access_warn(request, 'Insufficient permission')
-    raise MessageException("Permission Denied.  You are not the owner of this JobDesign.")
+  workflow = Workflow.objects.new_workflow(request.user)
+  ActionForm = design_form_by_type(node_type, request.user, workflow)
+  form = ActionForm(request.POST)
 
-  if request.method == 'POST':
-    jd.delete()
-    return list_designs(request)
-  else:
-    return render("confirm.html", request, dict(url=request.path, title="Delete job design?"))
+  if not form.is_valid():
+    raise StructuredException(code="INVALID_REQUEST_ERROR", message=_('Error saving design'), data={'errors': form.errors}, error_code=400)
 
-def submit_design(request, id, force_get=False):
-  """
-  Job design submission.
+  workflow.managed = False
+  # Every one should be able to execute and clone a design.
+  workflow.is_shared = True
+  workflow.save()
+  Workflow.objects.initialize(workflow, request.fs)
+  action = form.save(commit=False)
+  action.workflow = workflow
+  action.node_type = node_type
+  action.save()
+  workflow.start.add_node(action)
+  action.add_node(workflow.end)
 
-  force_get is used when other views chain to this view.
-  """
-  job_design = JobDesign.objects.get(pk=id)
-  form_type = interface.registry.get(job_design.type)
-  form = form_type(string_repr=job_design.data)
-  if not force_get and request.method == "POST":
-    if form.is_valid_parameterization(request.POST):
-      return _submit_to_cluster(request, job_design, form)
+  # Action form validates name and description.
+  workflow.name = request.POST.get('name')
+  workflow.description = request.POST.get('description')
+  workflow.save()
 
-  return render("parameterize.html", request, dict(form=form, job_design=job_design))
+  doc = workflow.doc.get()
+  doc.extra = 'jobsub'
+  doc.save()
 
-def _submit_to_cluster(request, job_design, form):
-  plan = SubmissionPlan()
-  plan.name = job_design.name
-  plan.user = request.user.username
-  plan.groups = request.user.get_groups()
-  plan.steps = form.to_job_submission_steps(plan.name)
+  # Save design again to update all fields.
+  data = format_dict_field_values(request.POST.copy())
+  _save_design(request.user, workflow.id, data)
 
-  submission = Submission(owner=request.user,
-    last_seen_state=State.SUBMITTED,
-    name=job_design.name,
-    submission_plan=plan)
+  return get_design(request, workflow.id)
 
-  # Save aggressively in case submit() below triggers an error.
-  submission.save()
-  try:
-    try:
-      submission.submission_handle = get_client().submit(plan)
-    except Exception:
-      submission.last_seen_state=State.ERROR
-      raise
-  finally:
-    submission.save()
 
-  watch_url = submission.watch_url()
-  return format_preserving_redirect(request, watch_url)
+def clone_design(request, design_id):
+  if request.method != 'POST':
+    raise StructuredException(code="METHOD_NOT_ALLOWED_ERROR", message=_('Must be a POST request.'), error_code=405)
 
-def watch(request):
-  offset = request.GET.get("offset", 0)
-  limit = request.GET.get("limit", 20)
-  submissions = Submission.objects.order_by('-submission_date')
-  limited = submissions[offset:limit]
-  more = len(limited) < len(submissions)
-  return render("watch.html", request,
-    dict(submissions=limited, offset=offset, limit=limit, more=more))
+  workflow = _get_design(request.user, design_id)
+  clone = workflow.clone(request.fs, request.user)
+  doc = clone.doc.get()
+  doc.extra = 'jobsub'
+  doc.save()
+  cloned_action = clone.start.get_child('to')
+  cloned_action.name = clone.name
+  cloned_action.save()
 
-def watch_submission(request, id):
-  """
-  Views job data for an already submitted job.
-  """
-  submission = Submission.objects.get(id=int(id))
-  handle = submission.submission_handle
-  job_data = get_client().get_job_data(handle)
-  submission.last_seen_state = job_data.state
-  submission.save()
-
-  completed = (job_data.state not in (State.SUBMITTED, State.RUNNING))
-  template = "watch_submission.html"
-  return render(template, request, dict(
-    id=id,
-    submission=submission,
-    job_data=job_data,
-    completed=completed,
-    jobs=job_data.hadoop_job_ids
-  ))
-
-def setup(request):
-  """Installs jobsub examples."""
-  if request.method == "GET":
-    return render("confirm.html", request, dict(url=request.path, title="Install job design examples?"))
-  else:
-    jobsub_setup.Command().handle_noargs()
-    return format_preserving_redirect(request, "/jobsub")
-
-def status_bar(request):
-  """Returns number of pending jobs tied to this user."""
-  pending_count = Submission.objects.filter(Q(owner=request.user), 
-    Q(last_seen_state=State.SUBMITTED) | Q(last_seen_state=State.RUNNING)).count()
-  # Use force_template to avoid returning JSON.
-  return render("status_bar.mako", request, dict(pending_count=pending_count), 
-    force_template=True)
-    
-# Disabled, because the state is a bit confusing.
-# This is more like a "inbox flag" that there's stuff that
-# the user hasn't looked at, but we haven't found a great
-# way to expose that.
-# register_status_bar_view(status_bar)
-
-CACHED_CLIENT = None
-def get_client():
-  """
-  Returns a stub to talk to the server.
-  """
-  global CACHED_CLIENT
-  if CACHED_CLIENT is None:
-    CACHED_CLIENT = thrift_util.get_client(JobSubmissionService.Client,
-      conf.JOBSUBD_HOST.get(), conf.JOBSUBD_PORT.get(), service_name="JobSubmission Daemon",
-      timeout_seconds=JOBSUB_THRIFT_TIMEOUT_SECS)
-  return CACHED_CLIENT
-
-def in_process_jobsubd(conf_dir=None):
-  """
-  Instead of talking through Thrift, connects
-  to jobsub daemon in process.
-  """
-  import jobsub.server
-  import hadoop.conf
-  global CACHED_CLIENT
-  prev = CACHED_CLIENT
-  next = jobsub.server.JobSubmissionServiceImpl()
-  finish = hadoop.conf.HADOOP_CONF_DIR.set_for_testing(conf_dir)
-  CACHED_CLIENT = next
-  class Close(object):
-    def __init__(self, client, prev):
-      self.client = client
-      self._prev = prev
-
-    def exit(self):
-      CACHED_CLIENT = self._prev
-      finish()
-  return Close(next, prev)
+  return get_design(request, clone.id)

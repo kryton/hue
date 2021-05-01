@@ -40,10 +40,25 @@ DESKTOP_ROOT := $(realpath .)
 include $(ROOT)/Makefile.vars.priv
 
 APPS := core \
-	libs/hadoop
+	libs/aws \
+	libs/azure \
+	libs/hadoop \
+	libs/indexer \
+	libs/libanalyze \
+	libs/liboauth \
+	libs/liboozie \
+	libs/librdbms \
+	libs/libsaml \
+	libs/libsentry \
+	libs/libsolr \
+	libs/libzookeeper \
+	libs/metadata \
+	libs/notebook \
+	libs/dashboard \
+        libs/kafka
 
 .PHONY: default
-default:: desktop syncdb
+default:: hue syncdb
 
 ###################################
 # Configuration
@@ -54,12 +69,12 @@ default:: desktop syncdb
 CONF_INI := $(patsubst $(CONF_DIR)/%.ini.tmpl,$(CONF_DIR)/%.ini,\
               $(wildcard $(CONF_DIR)/*.ini.tmpl))
 
-# Template ini to rewrite
-$(CONF_DIR)/%.ini:: $(CONF_DIR)/%.ini.tmpl
-	@echo "--- Rewriting $@"
-	sed -e 's:$$HADOOP_HOME:$(HADOOP_HOME):' $< > $@
+# Template ini to generate (only if it doesn't exist)
+$(CONF_DIR)/%.ini:: | $(CONF_DIR)/%.ini.tmpl
+	echo "--- Generating $@"
+	sed -e 's:$$HADOOP_HOME:$(HADOOP_HOME):' $| > $@
 
-# Pattern rule for desktop config file
+# Pattern rule for HUE config file
 .PHONY: conf
 conf: $(CONF_INI)
 
@@ -77,18 +92,16 @@ include $(DESKTOP_ROOT)/devtools.mk
 .PHONY: syncdb
 syncdb: $(DESKTOP_DB)
 
-$(DESKTOP_DB): $(BLD_DIR_BIN)/desktop
-	@echo "--- Regenerating database at $@"
+$(DESKTOP_DB): $(BLD_DIR_BIN)/hue
 	@if [ -n "$(DESKTOP_DEBUG)" ]; then \
-	  echo 'Removing old database (DESKTOP_DEBUG is set)' ; \
-	  rm -f $@ ; \
+	  @echo "--- Regenerating database at $@" \
+	  @echo 'Removing old database (DESKTOP_DEBUG is set)' ; \
+	  @rm -f $@ ; \
 	fi
-	@echo "--- Syncing/updating database at $@"
-	@$(BLD_DIR_BIN)/desktop syncdb --noinput
-	@$(BLD_DIR_BIN)/desktop migrate
 
 # Targets that simply recurse into all of the applications
 ENV_INSTALL_TARGETS := $(APPS:%=.recursive-env-install/%)
+$(info "----------------> ENV_INSTALL_TARGETS: $(ENV_INSTALL_TARGETS)")
 .recursive-env-install/%: %
 	$(MAKE) -C $< env-install
 
@@ -100,6 +113,10 @@ DISTCLEAN_TARGETS := $(APPS:%=.recursive-distclean/%)
 .recursive-distclean/%: %
 	$(MAKE) -C $< distclean
 
+EXT_CLEAN_TARGETS := $(APPS:%=.recursive-ext-clean/%)
+.recursive-ext-clean/%: %
+	$(MAKE) -C $< ext-clean
+
 .PHONY: env-install
 env-install: $(ENV_INSTALL_TARGETS)
 
@@ -110,15 +127,20 @@ clean: $(CLEAN_TARGETS)
 .PHONY: distclean
 distclean: clean $(DISTCLEAN_TARGETS)
 
+.PHONY: ext-clean
+ext-clean: $(EXT_CLEAN_TARGETS)
+
 
 #
-# desktop target
+# hue target
 #
-.PHONY: desktop
+.PHONY: hue
 # <<<< DEV ONLY
-desktop: $(BLD_DIR)/.devtools
+hue: $(BLD_DIR)/.devtools
 # END DEV ONLY >>>>
-desktop: env-install
+hue: env-install
+	@# Make symlink for backward compatibility
+	@ln -sf hue $(BLD_DIR_BIN)/desktop
 
 
 ###################################
@@ -145,14 +167,21 @@ install: install-source-parts $(INSTALL_BDIST_TARGETS)
 #
 SOURCE_PARTS = \
   $(wildcard *.mk) Makefile \
-  conf \
-  libs/fancyupload \
-  libs/mootools-color \
-  libs/mootools-slick \
-  libs/mootools-touch \
-  libs/protovis
+  conf
 
 .PHONY: install-source-parts
 install-source-parts:
 	@mkdir -p $(INSTALL_DIR)/desktop
 	@tar cf - $(SOURCE_PARTS) | tar -C $(INSTALL_DIR)/desktop -xf -
+	@# Remove the application configuration files
+	@find $(INSTALL_DIR)/desktop/conf -type l -exec rm {} \;
+
+# <<<< DEV ONLY
+###################################
+# Internationalization
+###################################
+COMPILE_LOCALE_TARGETS := $(APPS:%=.recursive-compile-locales/%)
+compile-locales: $(COMPILE_LOCALE_TARGETS)
+.recursive-compile-locales/%:
+	@$(MAKE) -C $* compile-locale
+# END DEV ONLY >>>>

@@ -1,0 +1,350 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`HueTable.vue should render a table 1`] = `
+<div
+  class="hue-table-container"
+>
+  <table
+    class="hue-table"
+  >
+    <caption>
+      
+      
+    
+    </caption>
+     
+    <thead>
+      <tr
+        class="header-row"
+      >
+        <th
+          scope="col"
+        >
+          
+          A
+        
+        </th>
+        <th
+          scope="col"
+        >
+          
+          D
+        
+        </th>
+        <th
+          scope="col"
+        >
+          
+          C
+        
+        </th>
+        <th
+          scope="col"
+        >
+          
+          B
+        
+        </th>
+         
+        <th
+          class="column-flush"
+          scope="col"
+        />
+      </tr>
+    </thead>
+     
+    <tbody>
+      <tr>
+        <td>
+          
+            1
+          
+        </td>
+        <td>
+          
+            
+          
+        </td>
+        <td>
+          
+            false
+          
+        </td>
+        <td>
+          
+            5
+          
+        </td>
+         
+        <td
+          class="column-flush"
+        />
+      </tr>
+      <tr>
+        <td>
+          
+            2
+          
+        </td>
+        <td>
+          
+            
+          
+        </td>
+        <td>
+          
+            true
+          
+        </td>
+        <td>
+          
+            6
+          
+        </td>
+         
+        <td
+          class="column-flush"
+        />
+      </tr>
+      <tr>
+        <td>
+          
+            3
+          
+        </td>
+        <td>
+          
+            
+          
+        </td>
+        <td>
+          
+            false
+          
+        </td>
+        <td>
+          
+            7
+          
+        </td>
+         
+        <td
+          class="column-flush"
+        />
+      </tr>
+      <tr>
+        <td>
+          
+            4
+          
+        </td>
+        <td>
+          
+            
+          
+        </td>
+        <td>
+          
+            true
+          
+        </td>
+        <td>
+          
+            8
+          
+        </td>
+         
+        <td
+          class="column-flush"
+        />
+      </tr>
+    </tbody>
+  </table>
+</div>
+`;
+
+exports[`HueTable.vue should render a table with a custom component for a cell 1`] = `
+<div
+  class="hue-table-container"
+>
+  <table
+    class="hue-table"
+  >
+    <caption>
+      
+      
+    
+    </caption>
+     
+    <thead>
+      <tr
+        class="header-row"
+      >
+        <th
+          scope="col"
+        >
+          
+          A
+        
+        </th>
+        <th
+          scope="col"
+        >
+          
+          B
+        
+        </th>
+         
+        <th
+          class="column-flush"
+          scope="col"
+        />
+      </tr>
+    </thead>
+     
+    <tbody>
+      <tr>
+        <td>
+          <div>
+            3
+          </div>
+        </td>
+        <td>
+          
+            2
+          
+        </td>
+         
+        <td
+          class="column-flush"
+        />
+      </tr>
+      <tr>
+        <td>
+          <div>
+            9
+          </div>
+        </td>
+        <td>
+          
+            5
+          
+        </td>
+         
+        <td
+          class="column-flush"
+        />
+      </tr>
+    </tbody>
+  </table>
+</div>
+`;
+
+exports[`HueTable.vue should render a table with adapter 1`] = `
+<div
+  class="hue-table-container"
+>
+  <table
+    class="hue-table"
+  >
+    <caption>
+      
+      
+    
+    </caption>
+     
+    <thead>
+      <tr
+        class="header-row"
+      >
+        <th
+          scope="col"
+        >
+          
+          A
+        
+        </th>
+        <th
+          scope="col"
+        >
+          
+          B + C
+        
+        </th>
+         
+        <th
+          class="column-flush"
+          scope="col"
+        />
+      </tr>
+    </thead>
+     
+    <tbody>
+      <tr>
+        <td>
+          
+            1
+          
+        </td>
+        <td>
+          
+            14
+          
+        </td>
+         
+        <td
+          class="column-flush"
+        />
+      </tr>
+      <tr>
+        <td>
+          
+            2
+          
+        </td>
+        <td>
+          
+            16
+          
+        </td>
+         
+        <td
+          class="column-flush"
+        />
+      </tr>
+      <tr>
+        <td>
+          
+            3
+          
+        </td>
+        <td>
+          
+            18
+          
+        </td>
+         
+        <td
+          class="column-flush"
+        />
+      </tr>
+      <tr>
+        <td>
+          
+            4
+          
+        </td>
+        <td>
+          
+            20
+          
+        </td>
+         
+        <td
+          class="column-flush"
+        />
+      </tr>
+    </tbody>
+  </table>
+</div>
+`;

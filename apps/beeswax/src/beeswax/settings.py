@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 DJANGO_APPS = [ "beeswax" ]
-NICE_NAME = "Beeswax (Hive UI)"
+NICE_NAME = "Hive"
 REQUIRES_HADOOP = True
-DEPENDER_PACKAGE_YMLS = [
-    "static/js/package.yml",
-]
+ICON = "beeswax/art/icon_beeswax_48.png"
+MENU_INDEX = 10
+
+IS_URL_NAMESPACED = True

@@ -13,117 +13,202 @@
 ## WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 ## See the License for the specific language governing permissions and
 ## limitations under the License.
-<%namespace name="wrappers" file="header_footer.mako" />
+
+<%!
+import time
+from desktop.views import commonheader, commonfooter
+from django.utils.translation import ugettext as _
+from beeswax import models
+from beeswax.views import collapse_whitespace
+%>
+
+<%namespace name="actionbar" file="actionbar.mako" />
+<%namespace name="layout" file="layout.mako" />
 <%namespace name="comps" file="beeswax_components.mako" />
-<%!  from beeswax.views import collapse_whitespace %>
-${wrappers.head("Beeswax: Query History", section='history')}
+
+${ commonheader(_('History'), app_name, user, request) | n,unicode }
+${ layout.menubar(section='history') }
+
 <%def name="show_saved_query(design, history)">
   % if design:
     % if request.user == design.owner:
-      % if design.type == models.SavedQuery.REPORT:
-        <a href="${ url('beeswax.views.edit_report', design_id=design.id) }" class="bw-view_query">
-      % else:
-        <a href="${ url('beeswax.views.execute_query', design_id=design.id) }" class="bw-view_query">
-      % endif
+      <a href="${ url(app_name + ':execute_design', design_id=design.id) }">
     % endif
     % if design.is_auto:
-      [ Unsaved ]
+      [ ${_('Unsaved')} ]
     % else:
       ${design.name}
     % endif
     % if request.user == design.owner:
     </a>
     % else:
-    ## TODO (bc/nutron): Shouldn't be able to edit someone else's design. Let user clone instead.
-    <a href="${ url('beeswax.views.clone_design', design_id=design.id) }" title="Copy this query.">Clone</a>
+    <a href="${ url(app_name + ':clone_design', design_id=design.id) }" title="${_('Copy this query.')}">${_('Copy')}</a>
     % endif
   % else:
-    [ Auto generated action ]
+    [ ${_('Auto generated action')} ]
   % endif
 </%def>
 
-<div id="list_history" class="view">
-  ${comps.pagination(page)}
+<div class="container-fluid">
+    <div class="row-fluid">
+        <div class="span2">
+            <div class="sidebar-nav">
+                <ul class="nav nav-list">
+                    <li class="nav-header">${_('Actions')}</li>
+                    % if share_queries:
+                        % if filter_params.get(prefix + 'user') == ':all':
+                          <%
+                            my_querydict = filter_params.copy()
+                            my_querydict[prefix + 'user'] = request.user.username
+                            if filter:
+                              my_querydict[prefix + 'search'] = filter
+                          %>
+                        <li><a href="?${my_querydict.urlencode()}">${_('Show my queries')}</a></li>
+                        % else:
+                          <%
+                            my_querydict = filter_params.copy()
+                            my_querydict[prefix + 'user'] = ':all'
+                            if filter:
+                              my_querydict[prefix + 'search'] = filter
+                          %>
+                          <li><a href="?${my_querydict.urlencode()}">${_("Show everyone's queries")}</a></li>
+                        % endif
+                    % endif
 
-  <div class="bw-show_group toolbar">
-      Show: 
-    % if filter_params.get('user') == '_all':
-      <%
-        my_querydict = filter_params.copy()
-        my_querydict['user'] = request.user.username
-      %>
-      <a href="?${my_querydict.urlencode()}" class="ccs-art_button bw-show_group_mine">mine</a>
-    % else:
-      <%
-        my_querydict = filter_params.copy()
-        my_querydict['user'] = '_all'
-      %>
-      <a href="?${my_querydict.urlencode()}" class="ccs-art_button bw-show_group_all">everyone's</a>
-    % endif
+                     % if filter_params.get(prefix + 'auto_query', 'on') == 'off':
+                      <%
+                        my_querydict = filter_params.copy()
+                        my_querydict[prefix + 'auto_query'] = 'on'
+                        if filter:
+                          my_querydict[prefix + 'search'] = filter
+                      %>
+                      <li><a href="?${my_querydict.urlencode()}">${_('Show auto queries')}</a></li>
+                    % else:
+                      <%
+                        my_querydict = filter_params.copy()
+                        my_querydict[prefix + 'auto_query'] = 'off'
+                        if filter:
+                          my_querydict[prefix + 'search'] = filter
+                      %>
+                      <li><a href="?${my_querydict.urlencode()}">${_('Show only saved queries')}</a></li>
+                    % endif
+                </ul>
+            </div>
+        </div>
+        <div class="span10">
+          <div class="card card-small">
+            <h1 class="card-heading simple">${_('History')}</h1>
 
-    % if filter_params.get('auto_query', None):
-      <%
-        my_querydict = filter_params.copy()
-        my_querydict['auto_query'] = ''
-      %>
-      <a href="?${my_querydict.urlencode()}" class="ccs-art_button bw-show_group_noauto">user queries</a>
-    % else:
-      <%
-        my_querydict = filter_params.copy()
-        my_querydict['auto_query'] = 'on'
-      %>
-      <a href="?${my_querydict.urlencode()}" class="ccs-art_button bw-show_group_auto">auto actions</a>
-    % endif
-  </div>
+            <%actionbar:render>
+              <%def name="search()">
+                <input id="filter" type="text" class="input-xxlarge search-query" placeholder="${_('Search for name, query, etc.')}" data-bind="textInput: searchQuery">
+              </%def>
+            </%actionbar:render>
 
-  <h3 class="ccs-hidden">Query History:</h3>
-  <table class="ccs-data_table selectable" cellpadding="0" cellspacing="0">
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Name</th>
-        <th>Query</th>
-        <th>User</th>
-        <th>State</th>
-        <th>Result</th>
-      </tr>
-    </thead>
-    <tbody>
-    <%!
-      from beeswax import models, views
-    %>
-    % for query in page.object_list:
-      <% 
-        qcontext = ""
-        design = query.design 
-        if design:
-          qcontext = views.make_query_context('design', design.id)
-      %>
-      <tr data-dblclick-delegate="{'dblclick_loads':'.bw-view_result'}" class="ccs-no_select ccs-help_links_small">
-        <td>${query.submission_date.strftime("%x %X")}</td>
-        <td>${show_saved_query(design, query)}</td>
-        <td>
-          <p class="ccs-info_text">
-            % if len(query.query) > 100:
-              <code>${collapse_whitespace(query.query[:100])}...</code>
-            % else:
-              <code>${collapse_whitespace(query.query)}</code>
+            <div class="card-body">
+              <p>
+
+            <table class="table table-condensed datatables" style="padding-left: 0;">
+            <thead>
+              <tr>
+                <th width="15%">${_('Time')}</th>
+                <th width="15%">${_('Name')}</th>
+                <th width="40%">${_('Query')}</th>
+                <th width="10%">${_('User')}</th>
+                <th width="5%">${_('State')}</th>
+                <th width="5%">${_('Result')}</th>
+              </tr>
+            </thead>
+            <tbody>
+            % if page:
+              % for query in page.object_list:
+                <tr class="histRow">
+                  <td data-sort-value="${time.mktime(query.submission_date.timetuple())}"></td>
+                  <td>${show_saved_query(query.design, query)}</td>
+                  <td>
+                    % if len(query.query) > 100:
+                      <code>${collapse_whitespace(query.query[:100])}...</code>
+                    % else:
+                      <code>${collapse_whitespace(query.query)}</code>
+                    % endif
+                  </td>
+                  <td>${query.owner}</td>
+                  <td>${query.last_state}</td>
+                  <td>
+                    % if query.last_state not in (models.QueryHistory.STATE.expired.value, models.QueryHistory.STATE.failed.value):
+                      <a href="${ url(app_name + ':watch_query_history', query_history_id=query.id) }" data-row-selector="true">${_('Results')}</a>
+                    % else:
+                      ~
+                    % endif
+                  </td>
+                </tr>
+              % endfor
             % endif
-          </p>
-        </td>
-        <td>${query.owner}</td>
-        <td>${models.QueryHistory.STATE[query.last_state]}</td>
-        <td class="bw-query_result">
-          % if query.last_state != models.QueryHistory.STATE.expired.index:
-            <a href="${ url('beeswax.views.watch_query', id=query.id) }?context=${qcontext|u}" class="bw-view_result ccs-art_button" data-icon-styles="{'width': 16, 'height': 16, 'top': 2}">Results</a>
-          % else:
-            ~
-          % endif
-        </td>
-      </tr>
-    % endfor
-    </tbody>
-  </table>
+            </tbody>
+          </table>
 
+                ${ comps.pagination(page) }
+              </p>
+            </div>
+          </div>
+        </div>
+    </div>
 </div>
-${wrappers.foot()}
+
+<script type="text/javascript">
+  $(document).ready(function () {
+
+    function HistoryViewModel() {
+      this.searchQuery = ko.observable("${ filter }").extend({ throttle: 500 });
+      this.searchQuery.subscribe(function (val) {
+        $(".datatables").css("opacity", 0.5)
+        $(".pagination").css("opacity", 0.5)
+        location.href = '?${ filter_params.get(prefix + 'user') and (prefix + 'user=' + filter_params.get(prefix + 'user') + '&') or '' }${ prefix }search=' + val;
+      });
+    }
+
+    ko.applyBindings(new HistoryViewModel());
+
+    $("[data-sort-value]").each(function(){
+      $(this).text(moment($(this).attr("data-sort-value")*1000).format("L LTS"));
+    });
+
+    $(".datatables").dataTable({
+      "bPaginate": false,
+      "bLengthChange": false,
+      "bInfo": false,
+      "bFilter": false,
+      "aoColumns": [
+        { "sSortDataType": "dom-sort-value", "sType": "numeric" },
+        null,
+        null,
+        null,
+        null,
+        { "bSortable": false }
+      ],
+      "aaSorting": [
+        [0, 'desc']
+      ],
+      "oLanguage": {
+        "sEmptyTable": "${_('No data available')}",
+        "sInfo": "${_('Showing _START_ to _END_ of _TOTAL_ entries')}",
+        "sInfoEmpty": "${_('Showing 0 to 0 of 0 entries')}",
+        "sInfoFiltered": "${_('(filtered from _MAX_ total entries)')}",
+        "sZeroRecords": "${_('No matching records')}",
+        "oPaginate": {
+          "sFirst": "${_('First')}",
+          "sLast": "${_('Last')}",
+          "sNext": "${_('Next')}",
+          "sPrevious": "${_('Previous')}"
+        }
+      },
+      "bStateSave": true
+    });
+
+    $(".search-query").focus().val($(".search-query").val());
+
+    $("a[data-row-selector='true']").jHueRowSelector();
+  });
+</script>
+
+${ commonfooter(request, messages) | n,unicode }

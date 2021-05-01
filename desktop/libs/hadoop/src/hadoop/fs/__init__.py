@@ -29,17 +29,32 @@ We maintain this usage of paths as arguments.
 When possible, the interfaces here have fidelity to the
 native python interfaces.
 """
-
-import __builtin__
-import grp
-import os
+from __future__ import division
+from future import standard_library
+from functools import reduce
+standard_library.install_aliases()
+from builtins import map
+from builtins import range
+from builtins import object
 import errno
+import grp
+import logging
+import math
+import os
+import posixpath
 import pwd
+import re
 import shutil
 import stat
-import logging
-import posixpath
-import re
+import sys
+
+if sys.version_info[0] > 2:
+  from builtins import open as builtins_open
+else:
+  from __builtin__ import open as builtins_open
+
+SEEK_SET, SEEK_CUR, SEEK_END = os.SEEK_SET, os.SEEK_CUR, os.SEEK_END
+
 
 # The web (and POSIX) always uses forward slash as a separator
 LEADING_DOUBLE_SEPARATORS = re.compile("^" + posixpath.sep*2)
@@ -146,7 +161,7 @@ class LocalSubFileSystem(object):
     if paths is None and 0 not in users and 0 not in groups:
       paths = [0]
     # complicated way of taking the intersection of three lists.
-    assert not reduce(set.intersection, map(set, [paths, users, groups]))
+    assert not reduce(set.intersection, list(map(set, [paths, users, groups])))
     def wrapped(*args):
       self = args[0]
       newargs = list(args[1:])
@@ -157,12 +172,15 @@ class LocalSubFileSystem(object):
       for i in groups:
         newargs[i] = grp.getgrnam(newargs[i]).gr_gid
 
+      if f == builtins_open and sys.version_info[0] > 2:
+        return f(*newargs, encoding='utf-8')
+
       return f(*newargs)
 
     return wrapped
 
   # These follow their namesakes.
-  open = _wrap(__builtin__.open)
+  open = _wrap(builtins_open)
   remove = _wrap(os.remove)
   mkdir = _wrap(os.mkdir)
   rmdir = _wrap(os.rmdir)
@@ -172,15 +190,20 @@ class LocalSubFileSystem(object):
   isfile = _wrap(os.path.isfile)
   isdir = _wrap(os.path.isdir)
   chmod = _wrap(os.chmod)
+  join = _wrap(os.path.join)
   # This could be provided with an error_handler
   rmtree = _wrap(shutil.rmtree)
   chown = _wrap(os.chown, paths=[0], users=[1], groups=[2])
+
+  @property
+  def uri(self):
+    return self.name
 
   def stats(self, path, raise_on_fnf=True):
     path = self._resolve_path(path)
     try:
       statobj = os.stat(path)
-    except OSError, ose:
+    except OSError as ose:
       if ose.errno == errno.ENOENT and not raise_on_fnf:
         return None
       raise
@@ -231,9 +254,9 @@ class FakeStatus(object):
     o = dict()
     GB = 1024*1024*1024
     o["bytesTotal"] = 5*GB
-    o["bytesUsed"] = 5*GB/2
+    o["bytesUsed"] = math.floor(5*GB / 2)
     o["bytesRemaining"] = 2*GB
-    o["bytesNonDfs"] = GB/2
+    o["bytesNonDfs"] = math.floor(GB / 2)
     o["liveDataNodes"] = 13
     o["deadDataNodes"] = 2
     o["upgradeStatus"] = dict(version=13, percentComplete=100, finalized=True)

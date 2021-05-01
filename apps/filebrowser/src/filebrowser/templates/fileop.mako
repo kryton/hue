@@ -15,18 +15,36 @@
 ## limitations under the License.
 <%!
 import datetime
+from django import forms
 from django.template.defaultfilters import urlencode, escape, stringformat, date, filesizeformat, time
+from desktop.views import commonheader, commonfooter
+from django.utils.translation import ugettext as _
 %>
 
-<html>
-<head><title>File Operation</title></head>
-<body>
-<h1>${form.op}</h1>
+
+
+${ commonheader(_('File Operation'), 'filebrowser', user, request) | n,unicode }
+
 ## Not sure if enctype breaks anything if used for things other than file upload.
-<form action="" method="POST" enctype="multipart/form-data">
-${form.as_p()|n}
-<input type="submit" value="Submit" />
-Go back to where you were: <a href="${urlencode(next)}">${next}</a>.
+
+<div class="container-fluid">
+<div class="well">
+<form action="" method="POST" enctype="multipart/form-data" class="form-stacked">
+${ csrf_token(request) | n,unicode }
+<h1>${form.op}</h1>
+% if isinstance(form, forms.Form):
+	${form.as_p()|n}
+% else:
+	% for _form in form.forms:
+		${_form.as_p()|n}
+	% endfor
+	${form.management_form}
+% endif
+<div>
+<input type="submit" value="${('Submit')}" class="btn btn-primary" />
+<a href="${urlencode(next)}" class="btn">${('Cancel')}</a>
+</div>
 </form>
-</body>
-</html>
+</div>
+
+${ commonfooter(request, messages) | n,unicode }

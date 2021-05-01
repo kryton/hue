@@ -17,10 +17,7 @@ DJANGO_APPS=['jobsub']
 NICE_NAME = "Job Designer"
 REQUIRES_HADOOP = True
 
-MIDDLEWARE_CLASSES=[
-  "jobsub.middleware.SubmissionErrorRecastMiddleware"
-]
-DEPENDER_PACKAGE_YMLS = [
-    "static/js/package.yml",
-]
+MIDDLEWARE_CLASSES=[]
 
+ICON = "jobsub/art/icon_jobsub_48.png"
+MENU_INDEX = 40

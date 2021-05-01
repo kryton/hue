@@ -13,291 +13,871 @@
 ## WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 ## See the License for the specific language governing permissions and
 ## limitations under the License.
+<%!
+from desktop import conf
+from desktop.views import commonheader, commonfooter
+from django.utils.translation import ugettext as _
+%>
+
 <%namespace name="comps" file="beeswax_components.mako" />
-<%namespace name="wrappers" file="header_footer.mako" />
-${wrappers.head('Create a Table', toolbar=has_tables, section='new table')}
-<div class="toolbar">
-  <ul class="ccs-bc-form ccs-breadcrumb clearfix" data-bc-sections=".ccs-bc-section" data-bc-form="form">
-    <li><a href="#step1">Name</a></li>
-    <li><a href="#step2">Record Format</a></li>
-    <li><a href="#step3">Serialization</a></li>
-    <li><a href="#step4">File Format</a></li>
-    <li><a href="#step5">Location</a></li>
-    <li><a href="#step6">Columns</a></li>
-  </ul>
-</div>
-<div id="table-setup" class="view">
-  <form action="#" method="POST" class="jframe_padded form-validator">
-    <dl class="bw-table-setup">
+<%namespace name="layout" file="layout.mako" />
 
-  <div class="ccs-bc-section">
-        <a name="step1"></a>
-        <dt>Step 1: Create Your Table</dt>
-        <dd>
-          <p>Let's start with a name and description for where we'll store your data.</p>
-          <dl class="clearfix">
-            ${comps.field(table_form["name"], attrs=dict(
-                klass='overtext required bw-validate-name',
-                alt='table_name',
-              ),
-              help="Name of the new table.  Table names must be globally unique.  Table names tend to correspond as well to the directory where the data will be stored.",
-              help_attrs=dict(
-                data_help_direction='1'
-              )
-            )}
-            ${comps.field(table_form["comment"], attrs=dict(
-                klass='overtext bw-table-comment',
-                alt='Optional'
-              ),
-              help="Use a table comment to describe your table.  For example, you might mention the data's provenance, and any caveats users of this table should expect.")}
-          </dl>
-          <a href="#step2" class="ccs-multipart-next">Step 2: Choose Your Record Format &raquo;</a>
-        </dd>
-      </div>
+${ commonheader(_("Create table manually"), 'metastore', user, request) | n,unicode }
 
-      <div class="ccs-bc-section">
-        <a name="step2"></a>
-        <dt>Step 2: Choose Your Record Format</dt>
-        <dd>
-          <p>Individual records are broken up into columns
-          either with delimiters (e.g., CSV or TSV) or using
-          a specific serialization / deserialization (SerDe) implementation.
-          (One common specialized SerDe is for parsing out columns with a regular
-          expression.)
-          </p>
-          <dl class="bw-format">
-            <% 
-              selected = table_form["row_format"].data or table_form["row_format"].field.initial
-            %>
-            <dt class="bw-format-delimited relays" data-group-toggle="{'group': '.bw-config-data li', 'show':'.bw-delim-options'}">
-              <label>
-                Delimited
-                <input type="radio" name="table-row_format" value="Delimited" class="validate-one-required:'.bw-format'" title="Please choose one of these record formats." data-error-container=''
-                  % if selected == "Delimited":
-                    checked
-                  % endif
-                >
-              </label>
-              <div class="ccs-errors"></div>
-            </dt>
-            <dd>Data files use delimiters, like commas (CSV) or tabs.</dd>
-            <dt class="bw-format-SerDe relays" data-group-toggle="{'group': '.bw-config-data li', 'show':'.bw-serde-options'}">
-              <label>
-                SerDe
-                <input type="radio" name="table-row_format" value="SerDe"
-                  % if selected == "SerDe":
-                    checked
-                  % endif
-                >
-              </label>
-            </dt>
-            <dd>Enter a specialized serialization implementation.</dd>
-          </dl>
-          <a href="#step3" class="ccs-multipart-next">Step 3: Configure Record Serialization &raquo;</a>
-        </dd>
-      </div>
+<span class="notebook">
+${ layout.metastore_menubar() }
 
-      <div class="ccs-bc-section">
-        <a name="step3"></a>
-        <dt>Step 3: Configure Record Serialization</dt>
-        <dd>
-          <ul class="bw-config-data">
-            <li class="bw-delim-options">
-              <p class="ccs-hidden">If your records are delimited, please configure these fields:</p>
-              Hive only supports single-character delimiters.
-              <dl>
-                ${comps.field(table_form["field_terminator"], render_default=True, help=r'Enter the column delimiter.  Must be a single character.  Use syntax like "\001" or "\t" for special characters.', klass="ccs-select-with-other")}
-                ${comps.field(table_form["collection_terminator"], render_default=True, help="Use for array types.", klass="ccs-select-with-other")}
-                ${comps.field(table_form["map_key_terminator"], render_default=True, help="Use for map types.", klass="ccs-select-with-other")}
-              </dl>
-            </li>
-            <li class="bw-serde-options">
-              <p class="ccs-hidden">If you're using SerDe data, please configure these fields:</p>
-              <dl>
-                ${comps.field(table_form["serde_name"],
-                  help="Enter the Java Classname of your SerDe. <em>e.g.</em>, org.apache.hadoop.hive.contrib.serde2.RegexSerDe",
-                  attrs=dict(
-                    klass='overtext required',
-                    alt='com.acme.hive.SerDe',
-                  )
-                )}
-                <%!
-                  help=r'Properties to pass to the (de)serialization mechanism. <em>e.g.,</em>, "input.regex" = "([^ ]*) ([^ ]*) ([^ ]*) (-|\\[[^\\]]*\\]) ([^ \"]*|\"[^\"]*\") (-|[0-9]*) (-|[0-9]*)(?: ([^ \"]*|\"[^\"]*\") ([^ \"]*|\"[^\"]*\"))?", "output.format.string" = "%1$s %2$s %3$s %4$s %5$s %6$s %7$s %8$s %9$s"'
-                %>
+<link rel="stylesheet" href="${ static('metastore/css/metastore.css') }">
+<link rel="stylesheet" href="${ static('notebook/css/notebook.css') }">
+<link rel="stylesheet" href="${ static('notebook/css/notebook-layout.css') }">
+<style type="text/css">
+% if conf.CUSTOM.BANNER_TOP_HTML.get():
+  .show-assist {
+    top: 110px!important;
+  }
+  .main-content {
+    top: 112px!important;
+  }
+% endif
+</style>
 
-                ${comps.field(table_form["serde_properties"],
-                  help=help,
-                  attrs=dict(
-                    klass='overtext',
-                    alt=r'"prop" = "value", "prop2" = "value2"'
-                  )
-                )}
-              </dl>
-            </li>
-          </ul>
-          <a href="#step4" class="ccs-multipart-next">Step 4: Choose a File Format &raquo;</a>
-        </dd>
-      </div>
+<a title="${_('Toggle Assist')}" class="pointer show-assist" data-bind="visible: !$root.isLeftPanelVisible() && $root.assistAvailable(), click: function() { $root.isLeftPanelVisible(true); }">
+  <i class="fa fa-chevron-right"></i>
+</a>
 
-      <div class="ccs-bc-section">
-        <a name="step4"></a>
-        <dt>Step 4: Choose a File Format</dt>
-        <dd>
-          <ul>
-            <li>Use TextFile for newline-delimited text files.</li>
-            <li>Use SequenceFile for Hadoop's binary serialization format.</li>
-            <li>Use InputFormat to choose a custom implementation.</li>
-          </ul>
-          <dl>
-            ${comps.field(table_form["file_format"],
-              render_default=True, 
-              klass="bw-file_formats",
-              notitle=True
-            )}
-            <div class="ccs-hidden bw-io_formats">
-              ${comps.field(table_form["input_format_class"],
-                help="Java Class to read data",
-                attrs=dict(
-                  klass='overtext',
-                  alt='com.acme.data.MyInputFormat'
-                )
-              )}
-              ${comps.field(table_form["output_format_class"],
-                help="Java Class used to write data",
-                attrs=dict(
-                  klass='overtext',
-                  alt='com.acme.data.MyOutputFormat'
-                )
-              )}
-            </div>
-          </dl>
-          <a href="#step5" class="ccs-multipart-next">Step 5: Choose Where To Save Your Table &raquo;</a>
-        </dd>
-      </div>
+<div class="main-content">
+  <div class="vertical-full container-fluid" data-bind="style: { 'padding-left' : $root.isLeftPanelVisible() ? '0' : '20px' }">
+    <div class="vertical-full">
+      <div class="vertical-full row-fluid panel-container">
 
-      <div class="ccs-bc-section">
-        <a name="step5"></a>
-        <dt>Step 5: Choose Where Your Table's Data is Stored</dt>
-        <dd class="bw-file_location">
-          <dl>
-            <div class="bw-default_location">
-              ${comps.field(table_form["use_default_location"],
-                render_default=True, 
-                help="Store your table in the default location (controlled by Hive, and typically <code>/user/hive/warehouse/table_name</code>)."
-              )}
-            </div>
-            <div class="bw-external_loc ccs-hidden">
-              ${comps.field(table_form["external_location"],
-                help="Enter the path (on HDFS) to your table's data location",
-                attrs=dict(
-                  klass='overtext required',
-                  alt='/user/user_name/data_dir'
-                )
-              )}<a class="ccs-choose_file ccs-art_button" data-icon-styles="{'width': 16, 'height': 16, 'top': 3, 'left': 6 }" data-chooseFor="table-external_location">Choose File</a>
-            </div>
-          </dl>
-          <a href="#step6" class="ccs-multipart-next">Final Step: Configure Table Columns &raquo;</a>
-        </dd>
-      </div>
+        <div class="assist-container left-panel" data-bind="visible: $root.isLeftPanelVisible() && $root.assistAvailable()">
+          <a title="${_('Toggle Assist')}" class="pointer hide-assist" data-bind="click: function() { $root.isLeftPanelVisible(false) }">
+            <i class="fa fa-chevron-left"></i>
+          </a>
+          <div class="assist" data-bind="component: {
+              name: 'assist-panel',
+              params: {
+                user: '${user.username}',
+                sql: {
+                  navigationSettings: {
+                    openItem: false,
+                    showStats: true
+                  }
+                },
+                visibleAssistPanels: ['sql']
+              }
+            }"></div>
+        </div>
+        <div class="resizer" data-bind="visible: $root.isLeftPanelVisible() && $root.assistAvailable(), splitDraggable : { appName: 'notebook', leftPanelVisible: $root.isLeftPanelVisible }"><div class="resize-bar">&nbsp;</div></div>
 
-      <div class="ccs-bc-section">
-        <a name="step6"></a>
-        <dt>Final Step: Configure Table Columns</dt>
-        <dd>
-          <dl class="bw-columns">
-            <%def name="render_column(form, is_partition_form=False)">
-              <div class="bw-column">
-                <dt class="bw-column_header bw-inactive">
-                  <input name="${form["column_name"].html_name | n}" value="${form["column_name"].data or ''}" class="overtext required bw-column_name" alt="Column Name"/>
-                  <p class="ccs-help_text" data-help-direction="1">
-                    Column name must be single words that start
-                    with a letter or a digit.
-                  </p>
-                  <div class="bw-remove_column">
-                    ${str(form["_deleted"]) | n}
-                  </div>
-                </dt>
-                <dd class="bw-column">
-                  <dl>
-                    <div class="bw-col_type ccs-inline">
-                      ${comps.field(form["column_type"],
-                        render_default=True,
-                        help="Type for this column.  Certain advanced types (namely, structs) are not exposed in this interface.",
-                        help_attrs=dict(
-                          data_help_direction='12'
-                        )
-                      )}
-                    </div>
-                    % if is_partition_form == False: 
-                      <div class="bw-array_type ccs-inline">
-                        ${comps.field(
-                            form["array_type"],
-                            render_default=True,
-                            help="Type of the array values.",
-                          )}
-                      </div>
-                      <div class="bw-map_data">
-                        <div class="bw-map_key_type ccs-inline">
-                          ${comps.field(form["map_key_type"], render_default=True, help="Type of the map keys.")}
+        <div class="content-panel">
+
+          <div class="metastore-main">
+
+            <h3>
+              <div class="inline-block pull-right" style="margin-top: -8px">
+                <a href="${ url('beeswax:import_wizard', database=database) }" title="${_('Create a new table from a file')}" class="inactive-action"><span class="fa-stack fa-fw" style="width: 1.28571429em"><i class="fa fa-file-o fa-stack-1x"></i><i class="fa fa-plus-circle fa-stack-1x" style="font-size: 14px; margin-left: 5px; margin-top: 6px;"></i></span></a>
+              </div>
+              <ul id="breadcrumbs" class="nav nav-pills hue-breadcrumbs-bar">
+                <li>
+                  <a href="${url('metastore:databases')}">${_('Databases')}</a><span class="divider">&gt;</span>
+                </li>
+                <li>
+                  <a href="${ url('metastore:show_tables', database=database) }">${database}</a><span class="divider">&gt;</span>
+                </li>
+                <li>
+                    <span style="padding-left:12px">${_('Create a new table manually')}</span>
+                </li>
+              </ul>
+            </h3>
+
+            <ul class="nav nav-pills">
+              <li class="active"><a href="#step1" class="step">${_('Step 1: Name')}</a></li>
+              <li><a href="#step2" class="step">${_('Step 2: Record Format')}</a></li>
+              <li><a href="#step3" class="step">${_('Step 3: Serialization')}</a></li>
+              <li><a href="#step4" class="step">${_('Step 4: File Format')}</a></li>
+              <li><a href="#step5" class="step">${_('Step 5: Location')}</a></li>
+              <li><a href="#step6" class="step">${_('Step 6: Columns')}</a></li>
+            </ul>
+
+            <form action="#" method="POST" id="mainForm" class="form-horizontal">
+              ${ csrf_token(request) | n,unicode }
+              <div class="steps">
+
+                <div id="step1" class="stepDetails">
+                    <fieldset>
+                        <div class="alert alert-info"><h3>${_('Create a table')}</h3>${_("Let's start with a name and description for where we'll store your data.")}</div>
+                        <div class="control-group">
+                            ${comps.bootstrapLabel(table_form["name"])}
+                            <div class="controls">
+                                ${comps.field(table_form["name"], attrs=dict(
+                                    placeholder=_('table_name'),
+                                  )
+                                )}
+                                <span  class="help-inline error-inline hide">${_('This field is required. Spaces are not allowed.')}</span>
+                                <p class="help-block muted">
+                                    ${_('Name of the new table. Table names must be globally unique. Table names tend to correspond to the directory where the data will be stored.')}
+                                </p>
+                            </div>
                         </div>
-                        <div class="bw-map_value_type ccs-inline">
-                          ${comps.field(form["map_value_type"], render_default=True, help="Type of the map values.")}
+                        <div class="control-group">
+                            ${comps.bootstrapLabel(table_form["comment"])}
+                            <div class="controls">
+                                ${comps.field(table_form["comment"], attrs=dict(
+                                  placeholder=_('Optional'),
+                                  )
+                                )}
+                                <p class="help-block muted">
+                                    ${_("Use a table comment to describe your table.  For example, note the data's provenance and any caveats users need to know.")}
+                                </p>
+                            </div>
                         </div>
-                      </div>
-                    % endif
-                    ${str(form["_exists"]) | n}
-                    
-                  </dl>
-                </dd>
+                    </fieldset>
+                </div>
+
+                <div id="step2" class="stepDetails hide">
+                    <fieldset>
+                        <div class="alert alert-info"><h3>${_('Choose Your Record Format')}</h3>
+                            ${_("Individual records are broken up into columns either with delimiters (e.g., CSV or TSV) or using a specific serialization/deserialization (SerDe) implementation. (One common specialized SerDe is for parsing out columns with a regular expression.)")}
+                        </div>
+                        <%
+                            selected = table_form["row_format"].data or table_form["row_format"].field.initial
+                        %>
+                        <div class="control-group">
+                            <label class="control-label" id="formatRadio">${_('Record format')}</label>
+                            <div class="controls">
+                                <label class="radio">
+                                    <input type="radio" name="table-row_format" value="Delimited"
+                                        % if selected == "Delimited":
+                                           checked
+                                        % endif
+                                            >
+                                    ${_('Delimited')}
+                                    <span class="help-block muted">
+                                    ${_('(Data files use delimiters, like commas (CSV) or tabs.)')}
+                                    </span>
+                                </label>
+                                <label class="radio">
+                                    <input type="radio" name="table-row_format" value="SerDe"
+                                        % if selected == "SerDe":
+                                           checked
+                                        % endif
+                                            >
+                                    ${_('SerDe')}
+                                    <span class="help-block muted">
+                                    ${_('(Enter a specialized serialization implementation.)')}
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                    </fieldset>
+                </div>
+
+                <div id="step3" class="stepDetails hide">
+                    <fieldset>
+                        <div id="step3Delimited" class="stepDetailsInner">
+                            <div class="alert alert-info"><h3>${_('Configure Record Serialization')}</h3>
+                                ${_('Only supports single-character delimiters.')}
+                            </div>
+                            <div class="control-group">
+                                ${comps.bootstrapLabel(table_form["field_terminator"])}
+                                <div class="controls">
+                                    ${comps.field(table_form["field_terminator"], render_default=True)}
+                                    <span  class="help-inline error-inline hide">${_('This field is required. Spaces are not allowed.')}</span>
+                                    <span class="help-block muted">
+                                        ${_('Enter the column delimiter. Must be a single character. Use syntax like "\\001" or "\\t" for special characters.')}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="control-group">
+                                ${comps.bootstrapLabel(table_form["collection_terminator"])}
+                                <div class="controls">
+                                    ${comps.field(table_form["collection_terminator"], render_default=True)}
+                                    <span  class="help-inline error-inline hide">${_('This field is required. Spaces are not allowed.')}</span>
+                                    <span class="help-block muted">
+                                        ${_('Use for array types.')}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="control-group">
+                                ${comps.bootstrapLabel(table_form["map_key_terminator"])}
+                                <div class="controls">
+                                    ${comps.field(table_form["map_key_terminator"], render_default=True)}
+                                    <span  class="help-inline error-inline hide">${_('This field is required. Spaces are not allowed.')}</span>
+                                    <span class="help-block muted">
+                                        ${_('Use for map types.')}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="step3SerDe" class="hide stepDetailsInner">
+                            <div class="alert alert-info"><h3>${_('Configure Record Serialization')}</h3>
+                            </div>
+                            <div class="control-group">
+                                ${comps.bootstrapLabel(table_form["serde_name"])}
+                                <div class="controls">
+                                    ${comps.field(table_form["serde_name"], attrs=dict(
+                                    placeholder='com.acme.hive.SerDe',
+                                    )
+                                    )}
+                                    <span class="help-block muted">
+                                        ${_('The Java class name of your SerDe.')} <em>${_('e.g.')}</em>, org.apache.hadoop.hive.contrib.serde2.RegexSerDe
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="control-group">
+                                ${comps.bootstrapLabel(table_form["serde_properties"])}
+                                <div class="controls">
+                                    ${comps.field(table_form["serde_properties"], attrs=dict(
+                                    placeholder='"prop" = "value", "prop2" = "value2"',
+                                    )
+                                    )}
+                                    <span class="help-block muted">
+                                        ${_('Properties to pass to the (de)serialization mechanism.')} <em>${_('e.g.')},</em>, "input.regex" = "([^ ]*) ([^ ]*) ([^ ]*) (-|\\[[^\\]]*\\]) ([^ \"]*|\"[^\"]*\") (-|[0-9]*) (-|[0-9]*)(?: ([^ \"]*|\"[^\"]*\") ([^ \"]*|\"[^\"]*\"))?", "output.format.string" = "%1$s %2$s %3$s %4$s %5$s %6$s %7$s %8$s %9$s"
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
+                </div>
+
+                <div id="step4" class="stepDetails hide">
+                    <fieldset>
+                        <div class="alert alert-info"><h3>${_('Choose a File Format')}</h3>
+                            ${_('Use')} <strong>TextFile</strong> ${_('for newline-delimited text files.')}
+                            ${_('Use')} <strong>SequenceFile</strong> ${_("for Hadoop's binary serialization format.")}
+                            ${_('Use')} <strong>InputFormat</strong> ${_('to choose a custom implementation.')}
+                            <br/>
+                        </div>
+
+                        <div class="control-group">
+                            <label id="fileFormatRadio" class="control-label">${_('File format')}</label>
+                            <div class="controls">
+                                ${comps.field(table_form["file_format"],
+                                render_default=True,
+                                klass="bw-file_formats",
+                                notitle=True
+                                )}
+                            </div>
+                        </div>
+                        <div id="inputFormatDetails" class="hide">
+                            <div class="control-group">
+                                ${comps.bootstrapLabel(table_form["input_format_class"])}
+                                <div class="controls">
+                                    ${comps.field(table_form["input_format_class"], attrs=dict(
+                                    placeholder='com.acme.data.MyInputFormat',
+                                    )
+                                    )}
+                                    <span  class="help-inline error-inline hide">${_('This field is required. Spaces are not allowed.')}</span>
+                                    <span class="help-block muted">
+                                        ${_('Java class used to read data.')}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="control-group">
+                                ${comps.bootstrapLabel(table_form["output_format_class"])}
+                                <div class="controls">
+                                    ${comps.field(table_form["output_format_class"], attrs=dict(
+                                    placeholder='com.acme.data.MyOutputFormat',
+                                    )
+                                    )}
+                                    <span  class="help-inline error-inline hide">${_('This field is required. Spaces are not allowed.')}</span>
+                                    <span class="help-block muted">
+                                        ${_('Java class used to write data.')}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
+                </div>
+
+                <div id="step5" class="stepDetails hide">
+                    <fieldset>
+                        <div class="alert alert-info"><h3>${_("Choose Where Your Table's Data is Stored")}</h3>
+                        </div>
+                        <div class="control-group">
+                            <label class="control-label">${_('Location')}</label>
+                            <div class="controls">
+                                <label class="checkbox">
+                                    ${comps.field(table_form["use_default_location"],
+                                    render_default=True
+                                    )}
+                                    ${_('Use default location')}
+                                </label>
+                                <span class="help-block muted">
+                                    ${_('Store your table in the default location (controlled by Hive, and typically')} <em>/user/hive/warehouse/table_name</em>).
+                                </span>
+                            </div>
+                        </div>
+
+                        <div id="location" class="control-group hide">
+                            ${comps.bootstrapLabel(table_form["external_location"])}
+                            <div class="controls">
+                                ${comps.field(table_form["external_location"],
+                                placeholder="/user/user_name/data_dir",
+                                klass="pathChooser input-xxlarge",
+                                file_chooser=True,
+                                show_errors=False
+                                )}
+                                <span class="help-block muted">
+                                ${_("Enter the path (on HDFS) to your table's data location")}
+                                </span>
+                            </div>
+                        </div>
+                    </fieldset>
+                </div>
+
+                <div id="step6" class="stepDetails hide">
+                    <fieldset>
+                        <div class="alert alert-info"><h3>${_('Configure Table Columns')}</h3>
+                        </div>
+                        <div class="control-group">
+                            <label class="control-label">${_('Table Properties')}</label>
+                            <div class="controls">
+                                <label class="checkbox">
+                                    ${comps.field(table_form["skip_header"],
+                                    render_default=True
+                                    )}
+                                    ${_('Skip Header Row?')}
+                                </label>
+                            </div>
+                        </div>
+                        % for form in columns_form.forms:
+                            ${render_column(form)}
+                        %endfor
+                        <div class="hide">
+                            ${unicode(columns_form.management_form) | n}
+                        </div>
+                        <button class="btn addColumnBtn" value="True" name="columns-add" type="submit">${_('Add a column')}</button>
+                    </fieldset>
+                    <br/><br/>
+                    <fieldset>
+                        <div class="alert alert-info"><h3>${_('Configure Partitions')}</h3>
+                            ${_('If your data is naturally partitioned (by date, for example), partitions are a way to tell the query server that data for a specific partition value are stored together.')}
+                            ${_('The query server establishes a mapping between directories on disk')}
+                            (<em>${_('e.g.')},</em> <code>/user/hive/warehouse/logs/dt=20100101/</code>)
+                            ${_('and the data for that day.  Partitions are virtual columns; they are not represented in the data itself, but are determined by the data location. The query server implements query optimizations such that queries that are specific to a single partition need not read the data in other partitions.')}
+                        </div>
+                        % for form in partitions_form.forms:
+                            ${render_column(form, True)}
+                        % endfor
+                        <div class="hide">
+                            ${unicode(partitions_form.management_form) | n}
+                        </div>
+                        <button class="btn addPartitionBtn" value="True" name="partitions-add" type="submit">${_('Add a partition')}</button>
+                    </fieldset>
+                </div>
               </div>
-            </%def>
-            <div class="bw-column-forms">
-              <p>Configure the columns of your table.</p>
-              % for form in columns_form.forms:
-                ${render_column(form)}
-              %endfor
-            </div>
-            <div class="bw-add_column">
-              ${str(columns_form.management_form) | n}
-            </div>
-            <h2>Partitions</h2>
-              ## See http://wiki.apache.org/hadoop/Hive/Tutorial
-              <p>
-              If your data is naturally partitioned (by, say, date),
-              partitions are a way to tell Hive that data
-              for a specific partition value are stored together.
-              Hive establishes a mapping between directories on disk
-              (<em>e.g.,</em> <code>/user/hive/warehouse/logs/dt=20100101/</code>)
-              and the data for that day.  Partitions are virtual
-              columns; they are not represented in the data themselves,
-              but are determined by the data location.  Hive implements
-              query optimizations such that queries that are specific
-              to a single partition need not read the data in other partitions.
-              </p>
-              <div class="bw-partition-forms">
-                % for form in partitions_form.forms:
-                  ${render_column(form, True)}
-                % endfor
+              <div class="form-actions" style="padding-left: 0">
+                  <button type="button" id="backBtn" class="btn hide">${_('Back')}</button>
+                  <button type="button" id="nextBtn" class="btn btn-primary">${_('Next')}</button>
+                  <input id="submit" type="submit" name="create" class="btn btn-primary hide" value="${_('Create table')}" />
               </div>
-              <div class="bw-add_partition bw-add_column">
-                ${str(partitions_form.management_form) | n}
-              </div>
-          </dl>
-          <input type="submit" class="bw-create_table_submit">
-        </dd>
+            </form>
+
+
+          </div>
+
+        </div>
       </div>
-    </dl>
-  </dd>
-
-</dl>
-
-  <div style="display:none">
-    <div class="beeswax_column_form_template ccs-hidden" style="display: none">
-      ${render_column(columns_form.empty_form())}
-    </div>
-    <div class="beeswax_partition_form_template ccs-hidden" style="display: none">
-      ${render_column(partitions_form.empty_form(), true)}
     </div>
   </div>
-</form>
-${wrappers.foot()}
+</div>
+
+
+<%def name="render_column(form, is_partition_form=False)">
+    <div class="cnt well">
+        <div class="remove">
+        ${comps.field(form['_deleted'], tag="button", button_text="x", notitle=True, attrs=dict(
+        type="submit",
+        title=_("Delete this column"),
+        klass="btn btn-small removeBtn"
+        ), value=True)}
+        </div>
+        <div class="control-group">
+            <label class="control-label">${_('Column name')}</label>
+            <div class="controls">
+                <input class="column input input-large" name="${form["column_name"].html_name | n}" value="${form["column_name"].data or ''}" placeholder="${_('Column Name')}"/>
+                % if form["column_name"].errors:
+                  <span class="help-inline error-inline">${ form["column_name"].errors.as_text() }</span>
+                % endif
+                <span  class="help-inline error-inline hide">${_('This field is required. Spaces are not allowed.')}</span>
+                <span  class="help-inline error-inline error-inline-bis hide">${_('There is another field with the same name.')}</span>
+                <span class="help-block muted">
+                ${_('Column name must be single words that start with a letter or a digit.')}
+                </span>
+            </div>
+        </div>
+        <div class="control-group">
+            <label class="control-label">${_('Column type')}</label>
+            <div class="controls columnType">
+            ${comps.field(form["column_type"],
+            render_default=True
+            )}
+            <span class="help-block muted">
+            ${_('Type for this column. Certain advanced types (namely, structs) are not exposed in this interface.')}
+            </span>
+            </div>
+        </div>
+        % if is_partition_form == False:
+                <div class="arraySpec hide">
+                    <div class="control-group">
+                        <label class="control-label">${_('Array value type')}</label>
+                        <div class="controls">
+                        ${comps.field(form["array_type"], render_default=True)}
+                            <span class="help-block muted">
+                            ${_('Type of the array values.')}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                <div class="mapSpec hide">
+                    <div class="control-group">
+                        <label class="control-label">${_('Map Key type')}</label>
+                        <div class="controls">
+                        ${comps.field(form["map_key_type"], render_default=True)}
+                            <span class="help-block muted">
+                            ${_('Type of the map keys.')}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label class="control-label">${_('Map Value type')}</label>
+                        <div class="controls">
+                        ${comps.field(form["map_value_type"], render_default=True)}
+                            <span class="help-block muted">
+                            ${_('Type of the map values.')}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+        % endif
+        <div class="charSpec hide">
+            <div class="control-group">
+                <label class="control-label">${_('Size')}</label>
+                <div class="controls">
+                ${comps.field(form["char_length"], render_default=True)}
+                    <span class="help-block muted">
+                    ${_("Length of char value (1~255)")}
+                    </span>
+                </div>
+            </div>
+        </div>
+        <div class="varcharSpec hide">
+            <div class="control-group">
+                <label class="control-label">${_('Size')}</label>
+                <div class="controls">
+                ${comps.field(form["varchar_length"], render_default=True)}
+                    <span class="help-block muted">
+                    ${_("Length of varchar value (1~65355)")}
+                    </span>
+                </div>
+            </div>
+        </div>
+
+    ${unicode(form["_exists"]) | n}
+
+    </div>
+
+</%def>
+
+
+
+
+<style type="text/css">
+  #filechooser {
+    min-height: 100px;
+    overflow-y: auto;
+    margin-top: 10px;
+    height: 250px;
+  }
+
+  .inputs-list {
+    list-style: none outside none;
+    margin-left: 0;
+  }
+
+  .remove {
+    float: right;
+  }
+
+  .error-inline {
+    color: #B94A48;
+    font-weight: bold;
+  }
+
+  .steps {
+    min-height: 350px;
+    margin-top: 10px;
+  }
+
+  div .alert {
+    margin-bottom: 30px;
+  }
+
+  .cnt.well {
+    border: none;
+  }
+
+  .cnt.well:hover {
+    background-color: #F0F0F0;
+  }
+
+  .help-block.muted, .help-inline.muted  {
+    color: #999;
+  }
+</style>
+
+</div>
+
+
+<script type="text/javascript">
+  (function () {
+    if (ko.options) {
+      ko.options.deferUpdates = true;
+    }
+
+    function CreateTableViewModel() {
+      var self = this;
+      self.apiHelper = window.apiHelper;
+      self.assistAvailable = ko.observable(true);
+      self.isLeftPanelVisible = ko.observable();
+      window.hueUtils.withLocalStorage('assist.assist_panel_visible', self.isLeftPanelVisible, true);
+      self.isLeftPanelVisible.subscribe(function () {
+        huePubSub.publish('assist.forceRender');
+      });
+
+      huePubSub.subscribe("assist.table.selected", function (entry) {
+        location.href = '/metastore/table/' + entry.path[0] + '/' + entry.name + '?connector_id=' + entry.getConnector().id + '&namespace=' + entry.namespace.id;
+      });
+
+      huePubSub.subscribe("assist.database.selected", function (entry) {
+        location.href = '/metastore/tables/' + entry.name + '?connector_id=' + entry.getConnector().id + '&namespace=' + entry.namespace.id;
+      });
+    }
+
+    $(document).ready(function () {
+
+      var viewModel = new CreateTableViewModel();
+
+      ko.applyBindings(viewModel);
+
+      if (hueUtils.getParameter("error") != "") {
+        $.jHueNotify.error(hueUtils.getParameter("error"));
+      }
+
+      if ($(".removeBtn").length == 1) {
+        $(".removeBtn").first().hide();
+      }
+
+      $(".fileChooserBtn").click(function (e) {
+        e.preventDefault();
+        var _destination = $(this).attr("data-filechooser-destination");
+        $("#filechooser").jHueFileChooser({
+          initialPath: $("input[name='" + _destination + "']").val(),
+          onFolderChoose: function (filePath) {
+            $("input[name='" + _destination + "']").val(filePath);
+            $("#chooseFile").modal("hide");
+          },
+          createFolder: false,
+          selectFolder: true,
+          uploadFile: false
+        });
+        $("#chooseFile").modal("show");
+      });
+
+      $(".step").click(function (event) {
+        event.preventDefault();
+        if (validateForm()) {
+          $(".stepDetails").hide();
+          var _step = $(this).attr("href");
+          $(_step).css("visibility", "visible").show();
+          $("#backBtn").hide();
+          if (_step != "#step1") {
+            $("#backBtn").css("visibility", "visible").show();
+          }
+          if (_step != "#step6") {
+            $("#nextBtn").show();
+            $("#submit").hide();
+          }
+          else {
+            $("#nextBtn").hide();
+            $("#submit").css("visibility", "visible").show();
+          }
+          $(".step").parent().removeClass("active");
+          $(this).parent().addClass("active");
+        }
+      });
+
+      $("#nextBtn").click(function () {
+        $("ul.nav-pills li.active").next().find("a").click();
+      });
+
+      $("#backBtn").click(function () {
+        $("ul.nav-pills li.active").prev().find("a").click();
+      });
+
+      $("#submit").click(function (event) {
+        // validate step 6
+        if (!validateStep6()) {
+          event.preventDefault();
+        }
+      });
+
+      var _url = location.href;
+      if (_url.indexOf("#") > -1) {
+        $(".step[href='" + _url.substring(_url.indexOf("#"), _url.length) + "']").click();
+      }
+
+      $("#id_table-field_terminator_1").css("margin-left", "4px").attr("placeholder", "${_('Type your field terminator here')}").hide();
+      $("#id_table-field_terminator_0").change(function () {
+        if ($(this).val() == "__other__") {
+          $("#id_table-field_terminator_1").show();
+        }
+        else {
+          $("#id_table-field_terminator_1").hide().nextAll(".error-inline").addClass("hide");
+        }
+      });
+      $("#id_table-collection_terminator_1").css("margin-left", "4px").attr("placeholder", "${_('Type your collection terminator here')}").hide();
+      $("#id_table-collection_terminator_0").change(function () {
+        if ($(this).val() == "__other__") {
+          $("#id_table-collection_terminator_1").show();
+        }
+        else {
+          $("#id_table-collection_terminator_1").hide().nextAll(".error-inline").addClass("hide");
+        }
+      });
+      $("#id_table-map_key_terminator_1").css("margin-left", "4px").attr("placeholder", "${_('Type your map key terminator here')}").hide();
+      $("#id_table-map_key_terminator_0").change(function () {
+        if ($(this).val() == "__other__") {
+          $("#id_table-map_key_terminator_1").show();
+        }
+        else {
+          $("#id_table-map_key_terminator_1").hide().nextAll(".error-inline").addClass("hide");
+        }
+      });
+
+      // fire the event on page load
+      $("#id_table-field_terminator_0").change();
+      $("#id_table-collection_terminator_0").change();
+      $("#id_table-map_key_terminator_0").change();
+
+      // show the first validation error if any
+      if ($(".errorlist").length > 0) {
+        $(".step[href='#" + $(".errorlist").eq(0).closest(".stepDetails").attr("id") + "']").click();
+      }
+
+      $("input[name='table-row_format']").change(function () {
+        $(".stepDetailsInner").hide();
+        $("#step3" + $(this).val()).show();
+      });
+
+      $("input[name='table-file_format']").change(function () {
+        $("#inputFormatDetails").hide();
+        if ($(this).val() == "InputFormat") {
+          $("#inputFormatDetails").slideDown();
+        }
+      });
+
+      $("#id_table-use_default_location").change(function () {
+        if (!$(this).is(":checked")) {
+          $("#location").slideDown();
+        }
+        else {
+          $("#location").slideUp();
+        }
+      });
+
+
+      $("#step6").find("button").click(function () {
+        $("#mainForm").attr("action", "#step6");
+      });
+
+      $(".columnType").find("select").change(function () {
+        $(this).parents(".cnt").find(".arraySpec").hide();
+        $(this).parents(".cnt").find(".mapSpec").hide();
+        $(this).parents(".cnt").find(".charSpec").hide();
+        $(this).parents(".cnt").find(".varcharSpec").hide();
+
+        if ($(this).val() == "array") {
+          $(this).parents(".cnt").find(".arraySpec").show();
+        }
+        if ($(this).val() == "map") {
+          $(this).parents(".cnt").find(".mapSpec").show();
+        }
+        if ($(this).val() == "char") {
+          $(this).parents(".cnt").find(".charSpec").show();
+        }
+        if ($(this).val() == "varchar") {
+          $(this).parents(".cnt").find(".varcharSpec").show();
+        }
+      });
+      // to show spec forms after clicking "Add a column" button
+      $(".columnType").find("select").trigger("change");
+
+      $("#step4").find("ul").addClass("inputs-list");
+
+      $(".addColumnBtn, .addPartitionBtn").click(function (e) {
+        if (!validateStep6()) {
+          e.preventDefault();
+        }
+      });
+
+      function validateStep6() {
+        var scrollTo = 0;
+        // step 6
+        var step6Valid = true;
+        $(".column").each(function () {
+          var _field = $(this);
+          if (!isValid($.trim(_field.val()))) {
+            showFieldError(_field);
+            if (scrollTo == 0) {
+              scrollTo = $(this).offset().top + $('.content-panel').scrollTop() - 150;
+            }
+            step6Valid = false;
+          }
+          else {
+            hideFieldError(_field);
+          }
+          var _lastSecondErrorField = null;
+          $(".column").not("[name='" + _field.attr("name") + "']").each(function () {
+            if ($.trim($(this).val()) != "" && $.trim($(this).val()) == $.trim(_field.val())) {
+              _lastSecondErrorField = $(this);
+              if (scrollTo == 0) {
+                scrollTo = _field.offset().top + $('.content-panel').scrollTop() - 150;
+              }
+              step6Valid = false;
+            }
+          });
+          if (_lastSecondErrorField != null) {
+            showSecondFieldError(_lastSecondErrorField);
+          }
+          else {
+            hideSecondFieldError(_field);
+          }
+        });
+        if (!step6Valid && scrollTo > 0) {
+          $('.content-panel').animate({
+            'scrollTop' : scrollTo
+          }, 500);
+        }
+        return step6Valid;
+      }
+
+      function validateForm() {
+        // step 1
+        var tableNameFld = $("input[name='table-name']");
+        if (!isValid($.trim(tableNameFld.val())) || !withoutSpaces($.trim(tableNameFld.val()))) {
+          showFieldError(tableNameFld);
+          return false;
+        }
+        else {
+          hideFieldError(tableNameFld);
+        }
+
+        // step 3
+        var step3Valid = true;
+        var fieldTerminatorFld = $("#id_table-field_terminator_1");
+        if ($("#id_table-field_terminator_0").val() == "__other__" && !isValid($.trim(fieldTerminatorFld.val()))) {
+          showFieldError(fieldTerminatorFld);
+          step3Valid = false;
+        }
+        else {
+          hideFieldError(fieldTerminatorFld);
+        }
+
+        var collectionTerminatorFld = $("#id_table-collection_terminator_1");
+        if ($("#id_table-collection_terminator_0").val() == "__other__" && !isValid($.trim(collectionTerminatorFld.val()))) {
+          showFieldError(collectionTerminatorFld);
+          step3Valid = false;
+        }
+        else {
+          hideFieldError(collectionTerminatorFld);
+        }
+
+        var mapKeyTerminatorFld = $("#id_table-map_key_terminator_1");
+        if ($("#id_table-map_key_terminator_0").val() == "__other__" && !isValid($.trim(mapKeyTerminatorFld.val()))) {
+          showFieldError(mapKeyTerminatorFld);
+          step3Valid = false;
+        }
+        else {
+          hideFieldError(mapKeyTerminatorFld);
+        }
+        if (!step3Valid) {
+          return false;
+        }
+
+        // step 4
+        var step4Valid = true;
+        if ($("input[name='table-file_format']:checked").val() == "InputFormat") {
+          var inputFormatFld = $("input[name='table-input_format_class']");
+          if (!isValid($.trim(inputFormatFld.val()))) {
+            showFieldError(inputFormatFld);
+            step4Valid = false;
+          }
+          else {
+            hideFieldError(inputFormatFld);
+          }
+
+          var outputFormatFld = $("input[name='table-output_format_class']");
+          if (!isValid($.trim(outputFormatFld.val()))) {
+            showFieldError(outputFormatFld);
+            step4Valid = false;
+          }
+          else {
+            hideFieldError(outputFormatFld);
+          }
+        }
+        if (!step4Valid) {
+          return false;
+        }
+
+        // step 5
+        var tableExternalLocationFld = $("input[name='table-external_location']");
+        if (!($("#id_table-use_default_location").is(":checked"))) {
+          if (!isValid($.trim(tableExternalLocationFld.val()))) {
+            showFieldError(tableExternalLocationFld);
+            return false;
+          }
+          else {
+            hideFieldError(tableExternalLocationFld);
+          }
+        }
+
+        return true;
+      }
+
+      function isValid(str) {
+        // validates against empty string
+        return (str != "");
+      }
+
+      function withoutSpaces(str) {
+        return (str.indexOf(" ") == -1);
+      }
+
+      function showFieldError(field) {
+        field.nextAll(".error-inline").not(".error-inline-bis").removeClass("hide");
+      }
+
+      function showSecondFieldError(field) {
+        field.nextAll(".error-inline-bis").removeClass("hide");
+      }
+
+      function hideFieldError(field) {
+        if (!(field.nextAll(".error-inline").hasClass("hide"))) {
+          field.nextAll(".error-inline").addClass("hide");
+        }
+      }
+
+      function hideSecondFieldError(field) {
+        if (!(field.nextAll(".error-inline-bis").hasClass("hide"))) {
+          field.nextAll(".error-inline-bis").addClass("hide");
+        }
+      }
+    });
+  })();
+</script>
+
+</span>
+${ commonfooter(request, messages) | n,unicode }

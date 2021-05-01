@@ -29,44 +29,72 @@ In order to have your application managed by supervisor, you need to add
 an entry_point to your application's egg with the name 'desktop.supervisor.specs'.
 This entry point should point to a SuperviseeSpec instance in your module.
 """
+
+from __future__ import print_function
+from builtins import range
+from builtins import object
 import daemon
-from daemon.pidlockfile import PIDLockFile
+import grp
+import logging
+import optparse
+import os
+import pkg_resources
 import pwd
 import signal
-import string
 import subprocess
 import sys
 import threading
 import time
-import logging
-import os
-import optparse
-import pkg_resources
+
+import desktop.lib.daemon_utils
 import desktop.lib.paths
 import desktop.log
+
+
+if sys.version_info[0] > 2:
+  from daemon.pidfile import TimeoutPIDLockFile
+  from daemon.daemon import DaemonContext
+  open_file = open
+else:
+  from daemon.pidlockfile import PIDLockFile
+  open_file = file
+
+  class TimeoutPIDLockFile(PIDLockFile):
+    """A PIDLockFile subclass that passes through a timeout on acquisition."""
+
+    def __init__(self, lockfile, timeout, **kwargs):
+      PIDLockFile.__init__(self, lockfile, **kwargs)
+      self.timeout = timeout
+
+    def __enter__(self):
+      super(TimeoutPIDLockFile, self).acquire(timeout=self.timeout)
+      return self
+
 
 PROC_NAME = 'supervisor'
 LOG = logging.getLogger()
 
 # If a process restarts mre than MAX_RESTARTS_IN_WINDOW times
 # within TIME_WINDOW number of seconds, the supervisor shuts down
-TIME_WINDOW=120
-MAX_RESTARTS_IN_WINDOW=3
+TIME_WINDOW = 120
+MAX_RESTARTS_IN_WINDOW = 3
 
-# User to setuid down to for any supervisees that don't have the
-# drop_root option set to False
-SETUID_USER="hue"
+# User and group to setuid/setgid down to for any supervisees that don't have
+# the drop_root option set to False
+SETUID_USER = "hue"
+SETGID_GROUP = "hue"
+g_user_uid = None       # We figure out the numeric uid/gid later
+g_user_gid = None
 
 # The entry point group in which to find processes to supervise.
-ENTRY_POINT_GROUP="desktop.supervisor.specs"
+ENTRY_POINT_GROUP = "desktop.supervisor.specs"
 
 # How long to wait while trying to acquire the supervisor pid lock
 # file. We shouldn't spin long here - we'd rather fail to start up.
-LOCKFILE_TIMEOUT=2
+LOCKFILE_TIMEOUT = 2
 
-# The desktop program
-DESKTOP_BIN = os.path.join(desktop.lib.paths.get_run_root(),
-                           'build', 'env', 'bin', 'desktop')
+# The hue program
+HUE_BIN = os.path.join(desktop.lib.paths.get_run_root(), 'build', 'env', 'bin', 'hue')
 
 ######
 
@@ -99,24 +127,12 @@ class DjangoCommandSupervisee(SuperviseeSpec):
 
   @property
   def cmdv(self):
-    return [ DESKTOP_BIN, self.django_command ]
-
-
-class TimeOutPIDLockFile(PIDLockFile):
-  """A PIDLockFile subclass that passes through a timeout on acquisition."""
-  def __init__(self, lockfile, timeout, **kwargs):
-    PIDLockFile.__init__(self, lockfile, **kwargs)
-    self.timeout = timeout
-
-  def __enter__(self):
-    super(TimeOutPIDLockFile, self).acquire(timeout=self.timeout)
-    return self
-
+    return [HUE_BIN, self.django_command]
 
 class Supervisor(threading.Thread):
   """A thread responsible for keeping the supervised subprocess running"""
   # States of the subprocess
-  STATES = (PENDING, RUNNING, FINISHED, ERROR) = range(4)
+  STATES = (PENDING, RUNNING, FINISHED, ERROR) = list(range(4))
 
   def __init__(self, cmdv, **kwargs):
     super(Supervisor, self).__init__()
@@ -127,38 +143,45 @@ class Supervisor(threading.Thread):
   def run(self):
     global CHILD_PIDS
 
-    restart_timestamps = []
-    proc_str = " ".join(self.cmdv)
-    LOG.info("Starting process %s" % proc_str)
-    while True:
-      self.state = Supervisor.RUNNING
-      pipe = subprocess.Popen(self.cmdv, close_fds=True,
-                              stdin=file("/dev/null"),
-                              **self.popen_kwargs)
-      LOG.info("Started proceses (pid %s) %s" % (pipe.pid, proc_str))
-      CHILD_PIDS.append(pipe.pid)
-      exitcode = pipe.wait()
-      if exitcode == 0:
-        LOG.info('Command "%s" exited normally.' % (proc_str,))
-        break
-      if exitcode != 0:
-        LOG.warn("Exit code for %s: %d" % (proc_str, exitcode))
-        self.state = Supervisor.ERROR
-      et = time.time()
+    try:
+      restart_timestamps = []
+      proc_str = " ".join(self.cmdv)
+      while True:
+        self.state = Supervisor.RUNNING
+        LOG.info("Starting process %s" % proc_str)
+        pipe = subprocess.Popen(self.cmdv, close_fds=True, stdin=open_file("/dev/null"), **self.popen_kwargs)
+        LOG.info("Started proceses (pid %s) %s" % (pipe.pid, proc_str))
+        CHILD_PIDS.append(pipe.pid)
+        exitcode = pipe.wait()
+        if exitcode == 0:
+          LOG.info('Command "%s" exited normally.' % (proc_str,))
+          self.state = Supervisor.FINISHED
+          return
+        if exitcode != 0:
+          LOG.warn("Exit code for %s: %d" % (proc_str, exitcode))
+          self.state = Supervisor.ERROR
+        et = time.time()
 
-      if SHOULD_STOP:
-        raise Exception("Stopping %s because supervisor dying" % proc_str)
-      restart_timestamps.append(et)
-      restart_timestamps = [t for t in restart_timestamps if t > et - TIME_WINDOW]
-      if len(restart_timestamps) > MAX_RESTARTS_IN_WINDOW:
-        earliest_restart = min(restart_timestamps)
-        ago = et - earliest_restart
-        raise Exception(
-          "Process %s has restarted more than %d times in the last %d seconds" % (
-            proc_str, MAX_RESTARTS_IN_WINDOW, int(ago)))
+        if SHOULD_STOP:
+          LOG.info("Stopping %s because supervisor exiting" % proc_str)
+          self.state = Supervisor.FINISHED
+          return
+        restart_timestamps.append(et)
+        restart_timestamps = [t for t in restart_timestamps if t > et - TIME_WINDOW]
+        if len(restart_timestamps) > MAX_RESTARTS_IN_WINDOW:
+          earliest_restart = min(restart_timestamps)
+          ago = et - earliest_restart
+          LOG.error(
+            "Process %s has restarted more than %d times in the last %d seconds" % (
+              proc_str, MAX_RESTARTS_IN_WINDOW, int(ago))
+          )
+          self.state = Supervisor.ERROR
+          return
 
-      LOG.info("Restarting process %s" % proc_str)
-    self.state = Supervisor.FINISHED
+        LOG.error("Process %s exited abnormally. Restarting it." % (proc_str,))
+    except BaseException as ex:
+      LOG.exception("Uncaught exception. Supervisor exiting.")
+      self.state = Supervisor.ERROR
 
 
 def shutdown(sups):
@@ -170,7 +193,7 @@ def shutdown(sups):
   for pid in CHILD_PIDS:
     try:
       os.kill(pid, signal.SIGINT)
-    except:
+    except OSError:
       pass
 
   LOG.warn("Waiting for children to exit for %d seconds..." % WAIT_FOR_DEATH)
@@ -189,42 +212,50 @@ def shutdown(sups):
     for pid in CHILD_PIDS:
       try:
         os.kill(pid, signal.SIGKILL)
-      except:
+      except OSError:
         pass
 
   sys.exit(1)
 
 def sig_handler(signum, frame):
-  raise Exception("Signal %d received. Exiting" % signum)
+  raise SystemExit("Signal %d received. Exiting" % signum)
 
 def parse_args():
   parser = optparse.OptionParser()
-  parser.add_option("-d", "--daemon", dest="daemonize",
-                    action="store_true", default=False)
-  parser.add_option("-p", "--pid-file", dest="pid_file",
-                    metavar="PID_FILE", default="supervisor.pid")
-  parser.add_option("-l", "--log-dir", dest="log_dir",
-                   metavar="DIR", default="logs")
-  parser.add_option('-e', '--exclude', dest='supervisee_exclusions',
-                    metavar='EXCLUSIONS', default=[], action='append',
-                    help='Command NOT to run from supervisor. May be included more than once.')
-  parser.add_option('-s', '--show', dest='show_supervisees',
-                    action='store_true', default=False)
+  parser.add_option("-d", "--daemon", dest="daemonize", action="store_true", default=False)
+  parser.add_option("-p", "--pid-file", dest="pid_file", metavar="PID_FILE", default="supervisor.pid")
+  parser.add_option("-l", "--log-dir", dest="log_dir", metavar="DIR", default="logs")
+  parser.add_option(
+      '-e', '--exclude', dest='supervisee_exclusions', metavar='EXCLUSIONS', default=[], action='append',
+      help='Command NOT to run from supervisor. May be included more than once.'
+  )
+  parser.add_option('-s', '--show', dest='show_supervisees', action='store_true', default=False)
+  parser.add_option('-u', '--user', dest='user', action='store', default=SETUID_USER)
+  parser.add_option('-g', '--group', dest='group', action='store', default=SETGID_GROUP)
   (options, args) = parser.parse_args()
   return options
 
 def get_pid_cmdline(pid):
-  return subprocess.Popen(["ps", "-p", str(pid), "-o", "cmd", "h"],
-                          stdout=subprocess.PIPE, close_fds=True).communicate()[0]
+  return subprocess.Popen(["ps", "-p", str(pid), "-o", "cmd", "h"], stdout=subprocess.PIPE, close_fds=True).communicate()[0]
 
 def get_supervisees():
   """Pull the supervisor specifications out of the entry point."""
   eps = list(pkg_resources.iter_entry_points(ENTRY_POINT_GROUP))
   return dict((ep.name, ep.load()) for ep in eps)
 
+
+def setup_user_info():
+  """Translate the user/group info into uid/gid."""
+  if os.geteuid() != 0:
+    return
+
+  global g_user_uid, g_user_gid
+  g_user_uid, g_user_gid = desktop.lib.daemon_utils.get_uid_gid(SETUID_USER, SETGID_GROUP)
+
+
 def drop_privileges():
   """Drop root privileges down to the specified SETUID_USER.
-  
+
   N.B. DO NOT USE THE logging MODULE FROM WITHIN THIS FUNCTION.
   This function is run in forked processes right before it calls
   exec, but the fork may have occured while a different thread
@@ -234,30 +265,43 @@ def drop_privileges():
   """
   we_are_root = os.getuid() == 0
   if not we_are_root:
-    print >>sys.stderr, "[INFO] Not running as root, skipping privilege drop"
+    print("[INFO] Not running as root, skipping privilege drop", file=sys.stdout)
     return
 
   try:
     pw = pwd.getpwnam(SETUID_USER)
-  except:
-    print >>sys.stderr, "[ERROR] Couldn't get user information for user " + SETUID_USER
+  except KeyError:
+    print("[ERROR] Couldn't get user information for user " + SETUID_USER, file=sys.stderr)
     raise
 
+  try:
+    gr = grp.getgrnam(SETGID_GROUP)
+  except KeyError:
+    print("[ERROR] Couldn't get group information for group " + SETGID_GROUP, file=sys.stderr)
+    raise
+
+  # gid has to be set first
+  os.setgid(gr.gr_gid)
   os.setuid(pw.pw_uid)
 
 
 def _init_log(log_dir):
   """Initialize logging configuration"""
   desktop.log.basic_logging(PROC_NAME, log_dir)
+  if os.geteuid() == 0:
+    desktop.log.chown_log_dir(g_user_uid, g_user_gid)
 
 
 def main():
+  global SETUID_USER, SETGID_GROUP
   options = parse_args()
+  SETUID_USER = options.user
+  SETGID_GROUP = options.group
   root = desktop.lib.paths.get_run_root()
   log_dir = os.path.join(root, options.log_dir)
 
   if options.show_supervisees:
-    for name, supervisee in get_supervisees().iteritems():
+    for name, supervisee in get_supervisees().items():
       if name not in options.supervisee_exclusions:
         print(name)
     sys.exit(0)
@@ -268,8 +312,10 @@ def main():
   if not os.path.exists(log_dir):
     os.makedirs(log_dir)
 
+  setup_user_info()
+
   pid_file = os.path.abspath(os.path.join(root, options.pid_file))
-  pidfile_context = TimeOutPIDLockFile(pid_file, LOCKFILE_TIMEOUT)
+  pidfile_context = TimeoutPIDLockFile(pid_file, LOCKFILE_TIMEOUT)
 
   existing_pid = pidfile_context.read_pid()
   if existing_pid:
@@ -278,8 +324,8 @@ def main():
       # pid is not actually running
       pidfile_context.break_lock()
     else:
-      raise Exception("Pid file %s indicates that Desktop is already running (pid %d)" %
-                      (pid_file, existing_pid))
+      LOG.error("Pid file %s indicates that Hue is already running (pid %d)" % (pid_file, existing_pid))
+      sys.exit(1)
   elif pidfile_context.is_locked():
     # If there's no pidfile but there is a lock, it's a strange situation,
     # but we should break the lock because it doesn't seem to be actually running
@@ -287,19 +333,23 @@ def main():
     pidfile_context.break_lock()
 
   if options.daemonize:
-    outfile = file(os.path.join(log_dir, 'supervisor.out'), 'a+', 0)
+    if sys.version_info[0] > 2:
+      outfile = open_file(os.path.join(log_dir, 'supervisor.out'), 'ba+', 0)
+    else:
+      outfile = open_file(os.path.join(log_dir, 'supervisor.out'), 'a+', 0)
     context = daemon.DaemonContext(
         working_directory=root,
         pidfile=pidfile_context,
         stdout=outfile,
         stderr=outfile,
-        )
+    )
 
     context.signal_map = {
-        signal.SIGTERM: sig_handler,
-        }
+      signal.SIGTERM: sig_handler,
+    }
 
     context.open()
+  os.umask(0o22)
 
   # Log initialization must come after daemonization, which closes all open files.
   # Log statements before this point goes to stderr.
@@ -307,7 +357,7 @@ def main():
 
   sups = []
   try:
-    for name, supervisee in get_supervisees().iteritems():
+    for name, supervisee in get_supervisees().items():
 
       if name in options.supervisee_exclusions:
         continue
@@ -318,24 +368,24 @@ def main():
         preexec_fn = None
 
       if options.daemonize:
-        log_stdout = file(os.path.join(log_dir, name + '.out'), 'a+', 0)
+        if sys.version_info[0] > 2:
+          log_stdout = open_file(os.path.join(log_dir, name + '.out'), 'ba+', 0)
+        else:
+          log_stdout = open_file(os.path.join(log_dir, name + '.out'), 'a+', 0)
         log_stderr = log_stdout
       else:
         # Passing None to subprocess.Popen later makes the subprocess inherit the
         # standard fds from the supervisor
         log_stdout = None
         log_stderr = None
-      sup = Supervisor(supervisee.cmdv,
-                       stdout=log_stdout, stderr=log_stderr,
-                       preexec_fn=preexec_fn)
+      sup = Supervisor(supervisee.cmdv, stdout=log_stdout, stderr=log_stderr, preexec_fn=preexec_fn)
       sup.start()
       sups.append(sup)
 
     wait_loop(sups, options)
-  except Exception, ex:
+  except BaseException as ex:
     LOG.exception("Exception in supervisor main loop")
-    shutdown(sups)
-    return 1
+    shutdown(sups)  # shutdown() exits the process
 
   return 0
 
@@ -349,7 +399,7 @@ def wait_loop(sups, options):
         if sup.state == Supervisor.FINISHED:
           sups.remove(sup)
         else:
-          shutdown(sups)
+          shutdown(sups)  # shutdown() exits the process
 
 
 if __name__ == "__main__":

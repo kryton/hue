@@ -16,41 +16,45 @@
 # limitations under the License.
 
 """
+Deprecated! Use WebHdfs instead.
+
+Only some utils and Hdfs are still used.
+
 Interfaces for Hadoop filesystem access via the HADOOP-4707 Thrift APIs.
 """
+from __future__ import division
+from past.builtins import cmp
+from future import standard_library
+standard_library.install_aliases()
+from builtins import object
 import errno
 import logging
+import math
 import os
 import posixpath
-import stat as statconsts
+import random
 import subprocess
 import sys
-import urlparse
 
-from thrift.transport import TTransport
-from thrift.transport import TSocket
-from thrift.protocol import TBinaryProtocol
+from django.utils.encoding import smart_str
+from django.utils.translation import ugettext as _
 
-from desktop.lib import thrift_util
-from hadoop.api.hdfs import Namenode, Datanode
-from hadoop.api.hdfs.constants import QUOTA_DONT_SET, QUOTA_RESET
-from hadoop.api.common.ttypes import RequestContext, IOException
-from hadoop.fs import normpath
+from desktop.lib import i18n
+
+import hadoop.conf
+from hadoop.fs import normpath, SEEK_SET, SEEK_CUR, SEEK_END
 from hadoop.fs.exceptions import PermissionDeniedException
 
-# SEEK_SET and family is found in posixfile or os, depending on the python version
-if sys.version_info[:2] < (2, 5):
-  import posixfile
-  _tmp_mod = posixfile
+if sys.version_info[0] > 2:
+  from django.utils.encoding import force_text as force_unicode
+  from urllib.parse import urlsplit as lib_urlsplit
 else:
-  _tmp_mod = os
-SEEK_SET, SEEK_CUR, SEEK_END = _tmp_mod.SEEK_SET, _tmp_mod.SEEK_CUR, _tmp_mod.SEEK_END
-del _tmp_mod
+  from django.utils.encoding import force_unicode
+  from urlparse import urlsplit as lib_urlsplit
 
 LOG = logging.getLogger(__name__)
 
 DEFAULT_USER = "webui"
-DEFAULT_GROUPS = ["webui"]
 
 # The number of bytes to read if not specified
 DEFAULT_READ_SIZE = 1024*1024 # 1MB
@@ -59,391 +63,48 @@ DEFAULT_READ_SIZE = 1024*1024 # 1MB
 WRITE_BUFFER_SIZE = 128*1024 # 128K
 
 # Class that we translate into PermissionDeniedException
-HADOOP_ACCESSCONTROLEXCEPTION="org.apache.hadoop.security.AccessControlException"
+HADOOP_ACCESSCONTROLEXCEPTION = "org.apache.hadoop.security.AccessControlException"
 
 # Timeout for thrift calls to NameNode
 NN_THRIFT_TIMEOUT = 15
 DN_THRIFT_TIMEOUT = 3
 
-class HadoopFileSystem(object):
+# Encoding used by HDFS namespace
+HDFS_ENCODING = 'utf-8'
+
+def encode_fs_path(path):
+  """encode_fs_path(path) -> byte string in utf8"""
+  return smart_str(path, HDFS_ENCODING, errors='strict')
+
+def decode_fs_path(path):
+  """decode_fs_path(bytestring) -> unicode path"""
+  return force_unicode(path, HDFS_ENCODING, errors='strict')
+
+
+def _coerce_exceptions(function):
   """
-  Implementation of Filesystem APIs through Thrift to a Hadoop cluster.
+  Decorator that causes exceptions thrown by the decorated function
+  to be coerced into generic exceptions from the hadoop.fs.exceptions
+  module.
   """
-
-  def __init__(self, host, thrift_port, hdfs_port=8020, hadoop_bin_path="hadoop"):
-    """
-    @param host hostname or IP of the namenode
-    @param thrift_port port on which the Thrift plugin is listening
-    @param hdfs_port port on which NameNode IPC is listening
-    @param hadoop_bin_path path to find the hadoop wrapper script on the
-                           installed system - default is fine if it is in
-                           the user's PATH env
-    """
-    self.host = host
-    self.thrift_port = thrift_port
-    self.hdfs_port = hdfs_port
-    self.hadoop_bin_path = hadoop_bin_path
-    self._resolve_hadoop_path()
-
-    self.nn_client = thrift_util.get_client(Namenode.Client, host, thrift_port, service_name="HDFS Namenode",
-                                            timeout_seconds=NN_THRIFT_TIMEOUT)
-
-    self.request_context = RequestContext()
-    self.setuser(DEFAULT_USER, DEFAULT_GROUPS)
-    LOG.debug("Initialized HadoopFS: %s:%d (%s)", host, thrift_port, hadoop_bin_path)
-
-  def _get_hdfs_base(self):
-    return "hdfs://%s:%d" % (self.host, self.hdfs_port) # TODO(todd) fetch the port from the NN thrift
-
-
-  def _coerce_exceptions(function):
-    """
-    Decorator that causes exceptions thrown by the decorated function
-    to be coerced into generic exceptions from the hadoop.fs.exceptions
-    module.
-    """
-    def wrapper(*args, **kwargs):
-      try:
-        return function(*args, **kwargs)
-      except IOException, e:
-        LOG.exception("Exception in Hadoop FS call " + function.__name__)
-        if e.clazz == HADOOP_ACCESSCONTROLEXCEPTION:
-          raise PermissionDeniedException(e.msg, e)
-        else:
-          raise
-    return wrapper
-
-  def _resolve_hadoop_path(self):
-    """The hadoop_bin_path configuration may be a non-absolute path, in which case
-    it's checked against $PATH.
-
-    If the hadoop binary can't be found anywhere, raises an Exception.
-    """
-    for path_dir in os.getenv("PATH", "").split(os.pathsep):
-      path = os.path.join(path_dir, self.hadoop_bin_path)
-      if os.path.exists(path):
-        self.hadoop_bin_path = os.path.abspath(path)
-        return
-
-    raise Exception("Hadoop binary (%s) does not exist." % self.hadoop_bin_path)
-
-
-  @property
-  def uri(self):
-    return self._get_hdfs_base()
-
-  @property
-  def superuser(self):
-    """
-    Retrieves the user that Hadoop considers as
-    "superuser" by looking at ownership of /.
-    This is slightly inaccurate.
-    """
-    return self.stats("/")["user"]
-
-  def setuser(self, user, groups=None):
-    # Hadoop UGI *must* have at least one group, so we mirror
-    # the username as a group if not specified
-    if not groups:
-      groups = [user]
-    if not self.request_context.confOptions:
-      self.request_context.confOptions = {}
-    self.ugi = ",".join([user] + groups)
-    self.request_context.confOptions['hadoop.job.ugi'] = self.ugi
-    self.user = user
-    self.groups = groups
-
-  @_coerce_exceptions
-  def open(self, path, mode="r", *args, **kwargs):
-    if mode == "w":
-      return FileUpload(self, path, mode, *args, **kwargs)
-    return File(self, path, mode, *args, **kwargs)
-
-  @_coerce_exceptions
-  def remove(self, path):
-    stat = self._hadoop_stat(path)
-    if not stat:
-      raise IOError("File not found: %s" % path)
-    if stat.isDir:
-      raise IOError("Is a directory: %s" % path)
-
-    success = self.nn_client.unlink(
-      self.request_context, normpath(path), recursive=False)
-    if not success:
-      raise IOError("Unlink failed")
-
-  @_coerce_exceptions
-  def mkdir(self, path, mode=0755):
-    # TODO(todd) there should be a mkdir that isn't mkdirHIER
-    # (this is mkdir -p I think)
-    success = self.nn_client.mkdirhier(self.request_context, normpath(path), mode)
-    if not success:
-      raise IOError("mkdir failed")
-
-  def _rmdir(self, path, recursive=False):
-    stat = self._hadoop_stat(path)
-    if not stat:
-      raise IOError("Directory not found: %s" % (path,))
-    if not stat.isDir:
-      raise IOError("Is not a directory: %s" % (path,))
-
-    success = self.nn_client.unlink(
-      self.request_context, normpath(path), recursive=recursive)
-    if not success:
-      raise IOError("Unlink failed")
-
-  @_coerce_exceptions
-  def rmdir(self, path):
-    return self._rmdir(path)
-
-  @_coerce_exceptions
-  def rmtree(self, path):
-    return self._rmdir(path, True)
-
-  @_coerce_exceptions
-  def listdir(self, path):
-    stats = self.nn_client.ls(self.request_context, normpath(path))
-    return [self.basename(stat.path) for stat in stats]
-
-  @_coerce_exceptions
-  def listdir_stats(self, path):
-    stats = self.nn_client.ls(self.request_context, normpath(path))
-    return [self._unpack_stat(s) for s in stats]
-
-  @_coerce_exceptions
-  def rename(self, old, new):
-    success = self.nn_client.rename(
-      self.request_context, normpath(old), normpath(new))
-    if not success: #TODO(todd) these functions should just throw if failed
-      raise IOError("Rename failed")
-
-  @_coerce_exceptions
-  def rename_star(self, old_dir, new_dir):
-    """Equivalent to `mv old_dir/* new"""
-    if not self.isdir(old_dir):
-      raise IOError("'%s' is not a directory" % (old_dir,))
-    if not self.exists(new_dir):
-      self.mkdir(new_dir)
-    elif not self.isdir(new_dir):
-      raise IOError("'%s' is not a directory" % (new_dir,))
-    ls = self.listdir(old_dir)
-    for dirent in ls:
-      self.rename(HadoopFileSystem.join(old_dir, dirent),
-                  HadoopFileSystem.join(new_dir, dirent))
-
-  @_coerce_exceptions
-  def exists(self, path):
-    stat = self._hadoop_stat(path)
-    return stat is not None
-
-  @_coerce_exceptions
-  def isfile(self, path):
-    stat = self._hadoop_stat(path)
-    if stat is None:
-      return False
-    return not stat.isDir
-
-  @_coerce_exceptions
-  def isdir(self, path):
-    stat = self._hadoop_stat(path)
-    if stat is None:
-      return False
-    return stat.isDir
-
-  @_coerce_exceptions
-  def stats(self, path, raise_on_fnf=True):
-    stat = self._hadoop_stat(path)
-    if not stat:
-      if raise_on_fnf:
-        raise IOError("File %s not found" % path)
-      else:
-        return None
-    ret = self._unpack_stat(stat)
-    return ret
-
-  @_coerce_exceptions
-  def chmod(self, path, mode):
-    self.nn_client.chmod(self.request_context, normpath(path), mode)
-
-  @_coerce_exceptions
-  def chown(self, path, user, group):
-    self.nn_client.chown(self.request_context, normpath(path), user, group)
-
-  @_coerce_exceptions
-  def get_namenode_info(self):
-    (capacity, used, available) = self.nn_client.df(self.request_context)
-    return dict(
-      usage=dict(capacity_bytes=capacity,
-                 used_bytes=used,
-                 available_bytes=available),
-      )
-  @_coerce_exceptions
-  def _get_blocks(self, path, offset, length):
-    """
-    Get block locations from the Name Node. Returns an array of Block
-    instances that might look like:
-      [ Block(path='/user/todd/motd', genStamp=1001, blockId=5564389078175231298,
-        nodes=[DatanodeInfo(xceiverCount=1, capacity=37265149952, name='127.0.0.1:50010',
-        thriftPort=53417, state=1, remaining=18987925504, host='127.0.0.1',
-        storageID='DS-1238582576-127.0.1.1-50010-1240968238474', dfsUsed=36864)], numBytes=424)]
-    """
-    return self.nn_client.getBlocks(self.request_context, normpath(path), offset, length)
-
-
-  def _hadoop_stat(self, path):
-    """Returns None if file does not exist."""
+  def wrapper(*args, **kwargs):
     try:
-      stat = self.nn_client.stat(self.request_context, normpath(path))
-      return stat
-    except IOException, ioe:
-      if ioe.clazz == 'java.io.FileNotFoundException':
-        return None
-      raise
-
-  @_coerce_exceptions
-  def _read_block(self, block, offset, len):
-    """
-    Reads a chunk of data from the given block from the first available
-    datanode that serves it.
-
-    @param block a thrift Block object
-    @param offset offset from the beginning of the block (not file)
-    @param len the number of bytes to read
-    """
-    errs = []
-    for node in block.nodes:
-      dn_conn = self._connect_dn(node)
-      try:
-        try:
-          data = dn_conn.readBlock(self.request_context, block, offset, len)
-          return data.data
-        except Exception, e:
-          errs.append(e)
-      finally:
-        dn_conn.close()
-
-    raise IOError("Could not read block %s from any replicas: %s" % (block, repr(errs)))
-
-  @_coerce_exceptions
-  def set_diskspace_quota(self, path, size):
-    """
-    Set the diskspace quota of a given path.
-    @param path The path to the given hdfs resource
-    @param size The amount of bytes that a given subtree of files can grow to.
-    """
-
-    if normpath(path) == '/':
-      raise ValueError('Cannot set quota for "/"')
-
-    if size < 0:
-      raise ValueError("The size quota should be 0 or positive or unset")
-
-    self.nn_client.setQuota(self.request_context, normpath(path), QUOTA_DONT_SET, size)
+      return function(*args, **kwargs)
+    except Exception as e:
+      e.msg = force_unicode(e.msg, errors='replace')
+      e.stack = force_unicode(e.stack, errors='replace')
+      LOG.exception("Exception in Hadoop FS call " + function.__name__)
+      if e.clazz == HADOOP_ACCESSCONTROLEXCEPTION:
+        raise PermissionDeniedException(e.msg, e)
+      else:
+        raise
+  return wrapper
 
 
-  @_coerce_exceptions
-  def set_namespace_quota(self, path, num_files):
-    """
-    Set the maximum number of files of a given path.
-    @param path The path to the given hdfs resource
-    @param num_files The amount of files that can exist within that subtree.
-    """
-
-    if normpath(path) == '/':
-      raise ValueError('Cannot set quota for "/"')
-
-    if num_files < 0:
-      raise ValueError("The number of files quota should be 0 or positive or unset")
-
-    self.nn_client.setQuota(self.request_context, normpath(path), num_files, QUOTA_DONT_SET)
-
-  @_coerce_exceptions
-  def clear_diskspace_quota(self, path):
-    """
-    Remove the diskspace quota at a given path
-    """
-    self.nn_client.setQuota(self.request_context, normpath(path), QUOTA_DONT_SET, QUOTA_RESET)
-
-  @_coerce_exceptions
-  def clear_namespace_quota(self, path):
-    """
-    Remove the namespace quota at a given path
-    """
-    self.nn_client.setQuota(self.request_context, normpath(path), QUOTA_RESET, QUOTA_DONT_SET)
-
-
-  @_coerce_exceptions
-  def get_diskspace_quota(self, path):
-    """
-    Get the current space quota in bytes for disk space. None if it is unset
-    """
-    space_quota = self.nn_client.getContentSummary(self.request_context, normpath(path)).spaceQuota
-    if space_quota == QUOTA_RESET or space_quota == QUOTA_DONT_SET:
-      return None
-    else:
-      return space_quota
-
-
-  @_coerce_exceptions
-  def get_namespace_quota(self, path):
-    """
-    Get the current quota in number of files. None if it is unset
-    """
-    file_count_quota = self.nn_client.getContentSummary(self.request_context, normpath(path)).quota
-    if file_count_quota == QUOTA_RESET or file_count_quota == QUOTA_DONT_SET:
-      return None
-    else:
-      return file_count_quota
-
-  @_coerce_exceptions
-  def get_usage_and_quota(self, path):
-    """
-    Returns a dictionary with "file_count", "file_quota",
-    "space_used", and "space_quota".  The quotas
-    may be None.
-    """
-    summary = self.nn_client.getContentSummary(self.request_context, normpath(path))
-    ret = dict()
-    ret["file_count"] = summary.fileCount
-    ret["space_used"] = summary.spaceConsumed
-    if summary.quota in (QUOTA_RESET, QUOTA_DONT_SET):
-      ret["file_quota"] = None
-    else:
-      ret["file_quota"] = summary.quota
-    if summary.spaceQuota in (QUOTA_RESET, QUOTA_DONT_SET):
-      ret["space_quota"] = None
-    else:
-      ret["space_quota"] = summary.spaceQuota
-    return ret
-
-  def _connect_dn(self, node):
-    sock = TSocket.TSocket(node.host, node.thriftPort)
-    sock.setTimeout(int(DN_THRIFT_TIMEOUT * 1000))
-    transport = TTransport.TBufferedTransport(sock)
-    protocol = TBinaryProtocol.TBinaryProtocol(transport)
-    client = Datanode.Client(protocol)
-    transport.open()
-    client.close = lambda: transport.close()
-    return client
-
-
-  @staticmethod
-  def _unpack_stat(stat):
-    """Unpack a Thrift "Stat" object into a dictionary that looks like fs.stat"""
-    mode = stat.perms
-    if stat.isDir:
-      mode |= statconsts.S_IFDIR
-    else:
-      mode |= statconsts.S_IFREG
-
-    return {
-      'path': stat.path,
-      'size': stat.length,
-      'mtime': stat.mtime / 1000,
-      'mode': mode,
-      'user': stat.owner,
-      'group': stat.group,
-      }
+class Hdfs(object):
+  """
+  An abstract HDFS proxy
+  """
 
   @staticmethod
   def basename(path):
@@ -462,6 +123,22 @@ class HadoopFileSystem(object):
     return posixpath.join(first, *comp_list)
 
   @staticmethod
+  def abspath(path):
+    return posixpath.abspath(path)
+
+  @staticmethod
+  def normpath(path):
+    res = posixpath.normpath(path)
+    # Python normpath() doesn't eliminate leading double slashes
+    if res.startswith('//'):
+      return res[1:]
+    return res
+
+  @staticmethod
+  def parent_path(path):
+    return Hdfs.join(path, "..")
+
+  @staticmethod
   def urlsplit(url):
     """
     Take an HDFS path (hdfs://nn:port/foo) or just (/foo) and split it into
@@ -471,17 +148,163 @@ class HadoopFileSystem(object):
     if i == -1:
       # Not found. Treat the entire argument as an HDFS path
       return ('hdfs', '', normpath(url), '', '')
-    if url[:i] != 'hdfs':
+    schema = url[:i]
+    if schema not in ('hdfs', 'viewfs'):
       # Default to standard for non-hdfs
-      return urlparse.urlsplit(url)
+      return lib_urlsplit(url)
     url = url[i+3:]
     i = url.find('/')
     if i == -1:
       # Everything is netloc. Assume path is root.
-      return ('hdfs', url, '/', '', '')
+      return (schema, url, '/', '', '')
     netloc = url[:i]
     path = url[i:]
-    return ('hdfs', netloc, normpath(path), '', '')
+    return (schema, netloc, normpath(path), '', '')
+
+  def listdir_recursive(self, path, glob=None):
+    """
+    listdir_recursive(path, glob=None) -> [ entry names ]
+
+    Get directory entry names without stats, recursively.
+    """
+    paths = [path]
+    while paths:
+      path = paths.pop()
+      if self.isdir(path):
+        hdfs_paths = self.listdir_stats(path, glob)
+        paths[:0] = [x.path for x in hdfs_paths]
+      yield path
+
+  def create_home_dir(self, home_path=None):
+    if home_path is None:
+      home_path = self.get_home_dir()
+
+    from hadoop.hdfs_site import get_umask_mode
+    from useradmin.conf import HOME_DIR_PERMISSIONS, USE_HOME_DIR_PERMISSIONS
+    mode = int(HOME_DIR_PERMISSIONS.get(), 8) if USE_HOME_DIR_PERMISSIONS.get() else (0o777 & (0o1777 ^ get_umask_mode()))
+    if not self.exists(home_path):
+      user = self.user
+      try:
+        try:
+          self.setuser(self.superuser)
+          self.mkdir(home_path)
+          self.chmod(home_path, mode)
+          self.chown(home_path, user)
+          try:  # Handle the case when there is no group with the same name as the user.
+            self.chown(home_path, group=user)
+          except IOError:
+            LOG.exception('Failed to change the group of "{}" to "{}" when creating a home directory '
+                          'for user "{}"'.format(home_path, user, user))
+        except IOError:
+          msg = 'Failed to create home dir ("%s") as superuser %s' % (home_path, self.superuser)
+          LOG.exception(msg)
+          raise
+      finally:
+        self.setuser(user)
+
+  def copyFromLocal(self, local_src, remote_dst, mode=0o755):
+    remote_dst = remote_dst.endswith(posixpath.sep) and remote_dst[:-1] or remote_dst
+    local_src = local_src.endswith(posixpath.sep) and local_src[:-1] or local_src
+
+    if os.path.isdir(local_src):
+      self._copy_dir(local_src, remote_dst, mode)
+    else:
+      (basename, filename) = os.path.split(local_src)
+      self._copy_file(local_src, self.isdir(remote_dst) and self.join(remote_dst, filename) or remote_dst)
+
+  def _copy_dir(self, local_dir, remote_dir, mode=0o755):
+    self.mkdir(remote_dir, mode=mode)
+
+    for f in os.listdir(local_dir):
+      local_src = os.path.join(local_dir, f)
+      remote_dst = self.join(remote_dir, f)
+
+      if os.path.isdir(local_src):
+        self._copy_dir(local_src, remote_dst, mode)
+      else:
+        self._copy_file(local_src, remote_dst)
+
+  def _copy_file(self, local_src, remote_dst, chunk_size=1024 * 1024 * 64):
+    if os.path.isfile(local_src):
+      if self.exists(remote_dst):
+        LOG.info(_('%(remote_dst)s already exists. Skipping.') % {'remote_dst': remote_dst})
+        return
+      else:
+        LOG.info(_('%(remote_dst)s does not exist. Trying to copy.') % {'remote_dst': remote_dst})
+
+      src = file(local_src)
+      try:
+        try:
+          self.create(remote_dst, permission=0o755)
+          chunk = src.read(chunk_size)
+          while chunk:
+            self.append(remote_dst, chunk)
+            chunk = src.read(chunk_size)
+          LOG.info(_('Copied %s -> %s.') % (local_src, remote_dst))
+        except:
+          LOG.exception(_('Copying %s -> %s failed.') % (local_src, remote_dst))
+          raise
+      finally:
+        src.close()
+    else:
+      LOG.info(_('Skipping %s (not a file).') % local_src)
+
+
+  @_coerce_exceptions
+  def mktemp(self, subdir='', prefix='tmp', basedir=None):
+    """
+    mktemp(prefix) ->  <temp_dir or basedir>/<subdir>/prefix.<rand>
+    Return a unique temporary filename with prefix in the cluster's temp dir.
+    """
+    RANDOM_BITS = 64
+
+    base = self.join(basedir or self._temp_dir, subdir)
+    if not self.isdir(base):
+      self.mkdir(base)
+
+    while True:
+      name = prefix + '.' + str(random.getrandbits(RANDOM_BITS))
+      candidate = self.join(base, name)
+      if not self.exists(candidate):
+        return candidate
+
+  def mkswap(self, filename, subdir='', suffix='swp', basedir=None):
+    """
+    mkswap(filename, suffix) ->  <temp_dir or basedir>/<subdir>/filename.<suffix>
+    Return a unique temporary filename with prefix in the cluster's temp dir.
+    """
+    RANDOM_BITS = 64
+
+    base = self.join(basedir or self._temp_dir, subdir)
+    if not self.isdir(base):
+      self.mkdir(base)
+
+    candidate = self.join(base, "%s.%s" % (filename, suffix))
+    return candidate
+
+  def exists(self):
+    raise NotImplementedError(_("%(function)s has not been implemented.") % {'function': 'exists'})
+
+  def do_as_user(self):
+    raise NotImplementedError(_("%(function)s has not been implemented.") % {'function': 'do_as_user'})
+
+  def create(self):
+    raise NotImplementedError(_("%(function)s has not been implemented.") % {'function': 'exists'})
+
+  def append(self):
+    raise NotImplementedError(_("%(function)s has not been implemented.") % {'function': 'append'})
+
+  def mkdir(self):
+    raise NotImplementedError(_("%(function)s has not been implemented.") % {'function': 'mkdir'})
+
+  def isdir(self):
+    raise NotImplementedError(_("%(function)s has not been implemented.") % {'function': 'isdir'})
+
+  def listdir_stats(self):
+    raise NotImplementedError(_("%(function)s has not been implemented.") % {'function': 'listdir_stats'})
+
+
+
 
 
 def require_open(func):
@@ -491,7 +314,7 @@ def require_open(func):
   """
   def wrapper(self, *args, **kwargs):
     if self.closed:
-      raise IOError("I/O operation on closed file")
+      raise IOError(errno.EBADF, "I/O operation on closed file")
     return func(self, *args, **kwargs)
   return wrapper
 
@@ -514,9 +337,9 @@ class File(object):
     stat = self._stat()
 
     if stat is None:
-      raise IOError("No such file or directory: '%s'" % path)
+      raise IOError(errno.ENOENT, "No such file or directory: '%s'" % path)
     if stat.isDir:
-      raise IOError("Is a directory: '%s'" % path)
+      raise IOError(errno.EISDIR, "Is a directory: '%s'" % path)
     #TODO(todd) somehow we need to check permissions here - maybe we need an access() call?
 
   # Minimal context manager implementation.
@@ -538,7 +361,7 @@ class File(object):
     elif whence == SEEK_END:
       self.pos = self._stat().length + offset
     else:
-      raise IOError("Invalid argument to seek for whence")
+      raise IOError(errno.EINVAL, "Invalid argument to seek for whence")
 
   @require_open
   def tell(self):
@@ -621,37 +444,52 @@ class FileUpload(object):
     if block_size:
       extra_confs.append("-Ddfs.block.size=%d" % block_size)
     self.subprocess_cmd = [self.fs.hadoop_bin_path,
-                           "dfs",
-                           "-Dfs.default.name=" + self.fs._get_hdfs_base(),
-                           "-Dhadoop.job.ugi=" + self.fs.ugi] + \
+                           "jar",
+                           hadoop.conf.SUDO_SHELL_JAR.get(),
+                           self.fs.user,
+                           "-Dfs.default.name=" + self.fs.uri] + \
                            extra_confs + \
-                           ["-put", "-", path]
+                           ["-put", "-", encode_fs_path(path)]
+
+    self.subprocess_env = i18n.make_utf8_env()
+
+    if 'HADOOP_CLASSPATH' in self.subprocess_env:
+      self.subprocess_env['HADOOP_CLASSPATH'] += ':' + hadoop.conf.HADOOP_EXTRA_CLASSPATH_STRING.get()
+    else:
+      self.subprocess_env['HADOOP_CLASSPATH'] = hadoop.conf.HADOOP_EXTRA_CLASSPATH_STRING.get()
+
+    if hadoop.conf.HADOOP_CONF_DIR.get():
+      self.subprocess_env['HADOOP_CONF_DIR'] = hadoop.conf.HADOOP_CONF_DIR.get()
+
     self.path = path
     self.putter = subprocess.Popen(self.subprocess_cmd,
                                    stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE,
-           close_fds=True,
+                                   close_fds=True,
+                                   env=self.subprocess_env,
                                    bufsize=WRITE_BUFFER_SIZE)
   @require_open
   def write(self, data):
+    """May raise IOError, particularly EPIPE"""
     self.putter.stdin.write(data)
 
   @require_open
   def close(self):
     try:
       (stdout, stderr) = self.putter.communicate()
-    except IOError, ioe:
-        logging.debug("Saw IOError writing %r" % self.path, exc_info=1)
-        if ioe.errno == 32: # Broken Pipe
-           stdout, stderr = self.putter.communicate()
+    except IOError as ioe:
+      logging.debug("Saw IOError writing %r" % self.path, exc_info=1)
+      if ioe.errno == errno.EPIPE:
+        stdout, stderr = self.putter.communicate()
+
     self.closed = True
     if stderr:
-      LOG.warn("HDFS FileUpload (cmd='%s')outputted stderr:\n%s" %
-                   (repr(self.subprocess_cmd), stderr))
+      LOG.warn("HDFS FileUpload (cmd='%s', env='%s') outputted stderr:\n%s" %
+                   (repr(self.subprocess_cmd), repr(self.subprocess_env), stderr))
     if stdout:
-      LOG.info("HDFS FileUpload (cmd='%s')outputted stdout:\n%s" %
-                   (repr(self.subprocess_cmd), stdout))
+      LOG.info("HDFS FileUpload (cmd='%s', env='%s') outputted stdout:\n%s" %
+                   (repr(self.subprocess_cmd), repr(self.subprocess_env), stdout))
     if self.putter.returncode != 0:
       raise IOError("hdfs put returned bad code: %d\nstderr: %s" %
                     (self.putter.returncode, stderr))
@@ -689,7 +527,7 @@ class BlockCache(object):
     if _max_idx < _min_idx:
       return None
 
-    pivot_idx = (_max_idx + _min_idx) / 2
+    pivot_idx = math.floor((_max_idx + _min_idx) / 2)
     pivot_block = self.blocks[pivot_idx]
     if pos < pivot_block.startOffset:
       return self.find_block(pos, _min_idx, pivot_idx - 1)
@@ -709,15 +547,15 @@ class BlockCache(object):
     # We could do a more efficient merge here since both lists
     # are already sorted, but these data structures are small, so let's
     # do the easy thing.
-    blocks_dict = dict( (b.blockId, b) for b in self.blocks )
+    blocks_dict = dict((b.blockId, b) for b in self.blocks)
 
     # Merge in new data to dictionary
     for nb in new_blocks:
       blocks_dict[nb.blockId] = nb
 
     # Convert back to sorted list
-    block_list = blocks_dict.values()
-    block_list.sort(cmp=lambda a,b: cmp(a.startOffset, b.startOffset))
+    block_list = list(blocks_dict.values())
+    block_list.sort(cmp=lambda a, b: cmp(a.startOffset, b.startOffset))
 
     # Update cache with new data
     self.blocks = block_list

@@ -15,8 +15,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from django.conf.urls.defaults import patterns, url
+from django.conf.urls import url
+from about import views as about_views
 
-urlpatterns = patterns('about',
-  url(r'^$', 'views.index'),
-)
+urlpatterns = [
+  url(r'^$', about_views.admin_wizard, name='index'),
+  url(r'^admin_wizard$', about_views.admin_wizard, name='admin_wizard'),
+
+  url(r'^update_preferences$', about_views.update_preferences, name='update_preferences'),
+]

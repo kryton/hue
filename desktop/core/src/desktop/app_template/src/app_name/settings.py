@@ -15,7 +15,5 @@
 # limitations under the License.
 DJANGO_APPS = [ "${app_name}" ]
 REQUIRES_HADOOP = False
-
-DEPENDER_PACKAGE_YMLS = [
-    "src/${app_name}/static/js/package.yml",
-]
+MENU_INDEX = 100
+ICON = "${app_name}/art/icon_${app_name}_48.png"

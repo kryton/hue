@@ -45,11 +45,11 @@
 # ==========
 # Here we summarize the flow of the build logic. Lines represent dependency.
 #
-#   virtual-bootstrap.py
-#             |                       ext/thirdparty/js (crepo sync)
-#   virtual-env (./env)                           |
-#             |                                   |
-#             '--------+----------+---------------'
+#                  virtual-bootstrap.py
+#                            |
+#                  virtual-env (./env)
+#                            |
+#                      +----------+
 #                      |          |
 #                      |          V
 #                      |       desktop  <--- recursive make in /desktop
@@ -80,20 +80,10 @@ ROOT := $(realpath .)
 
 include $(ROOT)/Makefile.vars.priv
 
+
 ###################################
 # Error checking
 ###################################
-
-# <<<< DEV ONLY
-CREPO ?= $(shell which crepo 2> /dev/null)
-ifeq ($(CREPO),)
-  $(error "Error: Need crepo. See <http://github.com/cloudera/crepo>.")
-endif
-
-ifneq ($(shell test -e $(HADOOP_HOME)/hadoop-core-0.20*.jar -o -e $(HADOOP_HOME)/hadoop*0.20*core.jar && echo $$?),0)
-  $(error "Error: No Hadoop 0.20 installation at $(HADOOP_HOME). Please set $$HADOOP_HOME.")
-endif
-# END DEV ONLY >>>>
 
 
 .PHONY: default
@@ -105,9 +95,10 @@ default:
 	@echo '  clean       : Remove desktop build products'
 	@echo '  distclean   : Remove desktop and thirdparty build products'
 # <<<< DEV ONLY
-	@echo '  docs        : Build documentation'
-	@echo '  crepo       : Update crepo'
+	@echo '  doc 	       : Build documentation'
 	@echo '  prod        : Generate a tar file for production distribution'
+	@echo '  locales     : Extract strings and update dictionary of each locale'
+	@echo '  ace         : Builds the Ace Editor tool'
 # END DEV ONLY >>>>
 
 .PHONY: all
@@ -117,26 +108,22 @@ all: default
 include Makefile.tarball
 
 ###################################
-# Build docs
+# Build docs (unused)
 ###################################
 .PHONY: docs
 docs:
 	@$(MAKE) -C docs
-
-###################################
-# Crepo
-###################################
-
-# Development use crepo to fetch thirdparty dependencies.
-
-.PHONY: crepo
-crepo: $(THIRDPARTY_JS_DIR)/manifest.json $(THIRDPARTY_JS_DIR)/*.hash
-	@echo "--- Synchronizing external dependencies with crepo"
-	@mkdir -p $(BLD_DIR)
-	@cd $(THIRDPARTY_JS_DIR) && $(CREPO) sync && \
-	  ($(CREPO) dump-refs > $(ROOT)/VERSION_DATA || true)
 # END DEV ONLY >>>>
 
+###################################
+# Install parent POM
+###################################
+parent-pom:
+ifneq (,$(BUILD_DB_PROXY))
+	cd $(ROOT)/maven && mvn install $(MAVEN_OPTIONS)
+endif
+
+.PHONY: parent-pom
 
 ###################################
 # virtual-env
@@ -145,7 +132,7 @@ virtual-env: $(BLD_DIR_ENV)/stamp
 $(BLD_DIR_ENV)/stamp:
 	@echo "--- Creating virtual environment at $(BLD_DIR_ENV)"
 	$(SYS_PYTHON) $(VIRTUAL_BOOTSTRAP) \
-		$(VIRTUALENV_OPTS) --no-site-packages $(BLD_DIR_ENV)
+		$(VIRTUALENV_OPTS) --system-site-packages $(BLD_DIR_ENV)
 	@touch $@
 	@echo "--- $(BLD_DIR_ENV) ready"
 
@@ -157,29 +144,32 @@ $(BLD_DIR_ENV)/stamp:
 .PHONY: desktop
 
 # <<<< DEV ONLY
-desktop: crepo
+desktop: parent-pom
 # END DEV ONLY >>>>
 desktop: virtual-env
 	@$(MAKE) -C desktop
+
 
 ###################################
 # Build apps
 ###################################
 .PHONY: apps
 apps: desktop
+	@$(MAKE) npm-install
 	@$(MAKE) -C $(APPS_DIR) env-install
+	@$(MAKE) create-static
 
 ###################################
 # Install binary dist
 ###################################
 INSTALL_CORE_FILES = \
 	Makefile* $(wildcard *.mk) \
-	virtual* \
-	example* \
 	ext \
 	tools/app_reg \
 	tools/virtual-bootstrap \
-	VERS* LICENSE* README*
+	tools/enable-python27.sh \
+	tools/relocatable.sh \
+	VERS* LICENSE* README* webpack-stats*.json
 
 .PHONY: install
 install: virtual-env install-check install-core-structure install-desktop install-apps install-env
@@ -221,9 +211,105 @@ install-env:
 	$(MAKE) -C $(INSTALL_DIR)/desktop env-install
 	@echo --- Setting up Applications
 	$(MAKE) -C $(INSTALL_DIR)/apps env-install
-	@echo --- Setting up Desktop database
-	$(MAKE) -C $(INSTALL_DIR)/desktop syncdb
+	@echo --- Setting up Frontend assets
+	cp $(ROOT)/package.json $(INSTALL_DIR)
+	cp $(ROOT)/webpack.config*.js $(INSTALL_DIR)
+	cp $(ROOT)/.babelrc $(INSTALL_DIR)
+	cp $(ROOT)/tsconfig.json $(INSTALL_DIR)
+	$(MAKE) -C $(INSTALL_DIR) npm-install
+	@if [ "$(MAKECMDGOALS)" = "install" ]; then \
+	  $(MAKE) -C $(INSTALL_DIR) create-static; \
+	fi
 
+
+###################################
+# Frontend and static assets
+###################################
+
+.PHONY: npm-install
+npm-install:
+	npm --version
+	node --version
+	npm install
+	npm run webpack
+	npm run webpack-login
+	npm run webpack-workers
+	node_modules/.bin/removeNPMAbsolutePaths .
+	@if [ "$(MAKECMDGOALS)" = "install" ]; then \
+	  rm -rf node_modules; \
+	fi
+
+.PHONY: create-static
+create-static:
+	./build/env/bin/hue collectstatic --noinput
+
+# <<<< DEV ONLY
+.PHONY: doc
+doc:
+	hugo --source docs/docs-site
+# END DEV ONLY >>>>
+
+
+###################################
+# Internationalization
+###################################
+
+# <<<< DEV ONLY
+.PHONY: locales
+locales:
+	@$(MAKE) -C desktop compile-locales
+	@$(MAKE) -C apps compile-locales
+# END DEV ONLY >>>>
+
+
+###################################
+# Ace Editor
+###################################
+
+# <<<< DEV ONLY
+.PHONY: ace
+ace:
+	@cd tools/ace-editor && ./hue-ace.sh
+# END DEV ONLY >>>>
+
+
+###################################
+# JISON Parser Generators
+###################################
+
+# <<<< DEV ONLY
+.PHONY: global-search-parser
+global-search-parser:
+	@pushd tools/jison/ && npm install && node generateParsers.js globalSearchParser && popd
+
+.PHONY: solr-all-parsers
+solr-all-parsers:
+	@pushd tools/jison/ && npm install  && node generateParsers.js solrQueryParser solrFormulaParser && popd
+
+.PHONY: solr-query-parser
+solr-query-parser:
+	@pushd tools/jison/ && npm install  && node generateParsers.js solrQueryParser && popd
+
+.PHONY: solr-formula-parser
+solr-formula-parser:
+	@pushd tools/jison/ && npm install  && node generateParsers.js solrFormulaParser && popd
+
+.PHONY: sql-all-parsers
+sql-all-parsers:
+	@pushd tools/jison/ && npm install  && node generateParsers.js generic hive impala && popd
+
+.PHONY: sql-autocomplete-parser
+sql-autocomplete-parser:
+	@pushd tools/jison/ && npm install  && node generateParsers.js genericAutocomp hiveAutocomp impalaAutocomp && popd
+
+.PHONY: sql-statement-parser
+sql-statement-parser:
+	@pushd tools/jison/ && npm install  && node generateParsers.js sqlStatementsParser && popd
+
+.PHONY: sql-syntax-parser
+sql-syntax-parser:
+	@pushd tools/jison/ && npm install  && node generateParsers.js genericSyntax hiveSyntax impalaSyntax && popd
+# END DEV ONLY >>>>
 
 ###################################
 # Cleanup
@@ -231,15 +317,13 @@ install-env:
 
 .PHONY: clean
 clean:
-	@rm -rf $(BLD_DIR_ENV)
 	@$(MAKE) -C desktop clean
 	@$(MAKE) -C apps clean
 # <<<< DEV ONLY
 	@$(MAKE) -C docs clean
-	@echo "Removing dependencies managed by crepo"
-	@cd $(THIRDPARTY_JS_DIR) && $(CREPO) do-all -x clean -f -x -d
-	@rm -f VERSION_DATA
 # END DEV ONLY >>>>
+	@rm -rf $(BLD_DIR_ENV)
+	@rm -rf $(STATIC_DIR)
 
 #
 # Note: It is important for clean targets to *ONLY* clean products of the
@@ -248,21 +332,33 @@ clean:
 .PHONY: distclean
 distclean: clean
 	@# Remove the other directories in build/
-	@rm -rf $(BLD_DIR)
 	@$(MAKE) -C desktop distclean
 	@$(MAKE) -C apps distclean
+	@rm -rf $(BLD_DIR)
+
+.PHONY: ext-clean
+ext-clean:
+	@$(MAKE) -C desktop ext-clean
+	@$(MAKE) -C apps ext-clean
 
 # <<<< DEV ONLY
 ###############################################
 # Misc (some used by automated test scripts)
 ###############################################
+
 test:
-	DESKTOP_DEBUG=1 $(BLD_DIR_BIN)/desktop test fast --with-xunit
+	DESKTOP_DEBUG=1 $(ENV_PYTHON) $(BLD_DIR_BIN)/hue test fast --with-xunit
 
 test-slow:
-	DESKTOP_DEBUG=1 $(BLD_DIR_BIN)/desktop test all --with-xunit --with-cover
-	$(BLD_DIR_BIN)/coverage xml
+	DESKTOP_DEBUG=1 $(ENV_PYTHON) $(BLD_DIR_BIN)/hue test all --with-xunit --with-cover
+	$(BLD_DIR_BIN)/coverage xml -i
 
 start-dev:
-	DESKTOP_DEBUG=1 $(BLD_DIR_BIN)/desktop runserver_plus
+	DESKTOP_DEBUG=1 $(ENV_PYTHON) $(BLD_DIR_BIN)/hue runserver_plus
+
+devinstall:
+	npm run devinstall
+
+css:
+	npm run less
 # END DEV ONLY >>>>

@@ -14,61 +14,33 @@
 ## See the License for the specific language governing permissions and
 ## limitations under the License.
 
-## Note that this is similar to the config_dump management command.
 <%!
-from desktop.lib.conf import BoundContainer, is_anonymous
+import logging
+import sys
+
+from desktop.views import commonheader, commonfooter
+
+
+LOG = logging.getLogger(__name__)
 %>
-  
-<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
-<html><head><title>Hue Configuration</title></head>
-<body>
-<h1>Hue Configuration</h1>
-<h2>Installed applications</h2>
-<ul>
-% for app in sorted(apps, key=lambda app: app.name.lower()):
-  % if hasattr(app, "urls_imported") and app.urls_imported:
-    <li><a href="/${app.name}/">${app.name}</a></li>
-  % else:
-    <li>${app.name}</li>
-  % endif
-% endfor
-</ul>
 
-<h2>Configuration Variables</h2>
-<%def name="recurse(config_obj)">
-<dl>
-  <dt>
-  % if is_anonymous(config_obj.config.key):
-    <i>(default section)</i>
-  % else:
-    ${config_obj.config.key}
-  % endif
-  </dt>
-  <dd>
-  % if isinstance(config_obj, BoundContainer):
-    <p class="dump_config_help"><i>${config_obj.config.help or "No help available."}</i></p>
+<%namespace name="layout" file="about_layout.mako" />
 
-    % for v in config_obj.get().values():
-<%
-      # Don't recurse into private variables.
-      if v.config.private and not show_private:
-        continue
-%>
-    ${recurse(v)}
-    % endfor
-  % else:
-    <p>${str(config_obj.get())}</p>
-    <p class="dump_config_help"><i>${config_obj.config.help or "No help available."}</i></p>
-    <p class="dump_config_default">Default: <i>${config_obj.config.default}</i></p>
-  % endif
-  </dd>
-</dl>
-</%def>
+${ layout.menubar(section='dump_config') }
 
-${recurse(top_level)}
+<style type="text/css">
+  .card-heading .pull-right {
+    font-size: 12px;
+    font-weight: normal;
+  }
+</style>
 
-<hr/>
+<div id="aboutConfiguration">
+  <!-- ko component: { name: 'hue-config-tree' } --><!-- /ko -->
+</div>
 
-<a href="/accounts/logout">Logout</a>
-</body>
-</html>
+<script type="text/javascript">
+  $(document).ready(function () {
+    ko.applyBindings({}, $('#aboutConfiguration')[0]);
+  });
+</script>

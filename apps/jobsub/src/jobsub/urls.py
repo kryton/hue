@@ -15,29 +15,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from django.conf.urls.defaults import patterns, url
+from django.conf.urls import url
+from jobsub import views as jobsub_views
 
-urlpatterns = patterns(
-  'jobsub',
-
+urlpatterns = [
   # The base view is the "list" view, which we alias as /
-  url(r'^$', 'views.list_designs'),
+  url(r'^$', jobsub_views.list_designs),
 
-  # Manipulations of job designs:
-  url(r'^list/$', 'views.list_designs', name="jobsub.list"),
-  url(r'^delete/(?P<id>\d+)$', 'views.delete_design', name="jobsub.delete"),
-  url(r'^edit/(?P<id>\d+)$', 'views.edit_design', name="jobsub.edit"),
-  url(r'^clone/(?P<id>\d+)$', 'views.clone_design', name="jobsub.clone"),
-  url(r'^new/(?P<type>[a-zA-Z]+)$', 'views.edit_design', name="jobsub.new"),
-  url(r'^submit/(?P<id>\d+)$', 'views.submit_design', name="jobsub.submit"),
+  # Not available on Hue 4
+  url(r'^not_available$', jobsub_views.not_available),
 
-  # Submitted jobs
-  url(r'^watch/$', 'views.watch'),
-  url(r'^watch/(?P<id>\d+)$', 'views.watch_submission'),
-
-  # Status Bar (typically invoked by /status_bar, not /jobsub/status_bar)
-  url(r'^status_bar/$', 'views.status_bar'),
-
-  # Setup
-  url(r'^setup/$', 'views.setup'),
-)
+  # Actions: get, save, clone, delete, submit, new.
+  url(r'^designs$', jobsub_views.list_designs, name="jobsub.views.list_designs"),
+  url(r'^designs/(?P<design_id>\d+)$', jobsub_views.get_design, name="jobsub.views.get_design"),
+  url(r'^designs/(?P<node_type>\w+)/new$', jobsub_views.new_design, name="jobsub.views.new_design"),
+  url(r'^designs/(?P<design_id>\d+)/save$', jobsub_views.save_design, name="jobsub.views.save_design"),
+  url(r'^designs/(?P<design_id>\d+)/clone$', jobsub_views.clone_design, name="jobsub.views.clone_design"),
+  url(r'^designs/(?P<design_id>\d+)/delete$', jobsub_views.delete_design, name="jobsub.views.delete_design"),
+  url(r'^designs/(?P<design_id>\d+)/restore$', jobsub_views.restore_design, name="jobsub.views.restore_design"),
+]

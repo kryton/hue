@@ -19,14 +19,22 @@
 Registry for the applications
 """
 
+from builtins import object
 import glob
 import logging
 import os
-import simplejson
+import sys
+import json
 
 import common
+from common import cmp
+
+if sys.version_info[0] > 2:
+  from builtins import object
+
 
 LOG = logging.getLogger(__name__)
+
 
 class AppRegistry(object):
   """
@@ -34,32 +42,36 @@ class AppRegistry(object):
   """
   def __init__(self):
     """Open the existing registry"""
-    self._reg_path = os.path.join(common.INSTALL_ROOT, 'app.reg')
+    self._reg_path = os.path.join(common.HUE_APP_REG_DIR, 'app.reg')
     self._initialized = False
-    self._apps = { }    # Map of name -> DesktopApp
+    self._apps = { }    # Map of name -> HueApp
     self._open()
-
 
   def _open(self):
     """Open the registry file. May raise OSError"""
     if os.path.exists(self._reg_path):
-      reg_file = file(self._reg_path)
-      app_list = simplejson.load(reg_file)
+      if sys.version_info[0] > 2:
+        reg_file = open(self._reg_path)
+      else:
+        reg_file = file(self._reg_path)
+      app_list = json.load(reg_file)
       reg_file.close()
 
       for app_json in app_list:
-        app = DesktopApp.create(app_json)
+        app_json.setdefault('author', 'Unknown')        # Added after 0.9
+        app = HueApp.create(app_json)
         self._apps[app.name] = app
 
     self._initialized = True
 
-
   def _write(self, path):
     """Write out the registry to the given path"""
-    outfile = file(path, 'w')
-    simplejson.dump(self._apps.values(), outfile, cls=AppJsonEncoder, indent=2)
+    if sys.version_info[0] > 2:
+      outfile = open(path, 'w')
+    else:
+      outfile = file(path, 'w')
+    json.dump(list(self._apps.values()), outfile, cls=AppJsonEncoder, indent=2)
     outfile.close()
-
 
   def contains(self, app):
     """Returns whether the app (of the same version) is in the registry"""
@@ -68,7 +80,6 @@ class AppRegistry(object):
       return existing.version == app.version
     except KeyError:
       return False
-
 
   def register(self, app):
     """register(app) -> True/False"""
@@ -82,7 +93,7 @@ class AppRegistry(object):
       elif version_diff < 0:
         LOG.info('Upgrading %s from version %s' % (app, existing.version))
       elif version_diff > 0:
-        LOG.error('A newer version of %s is already installed' % (app,))
+        LOG.error('A newer version (%s) of %s is already installed' % (existing.version, app))
         return False
     except KeyError:
       pass
@@ -91,66 +102,154 @@ class AppRegistry(object):
     self._apps[app.name] = app
     return True
 
-
   def unregister(self, app_name):
-    """unregister(app_Name) -> DesktopApp. May raise KeyError"""
+    """unregister(app_Name) -> HueApp. May raise KeyError"""
     assert self._initialized, "Registry not yet initialized"
 
     app = self._apps[app_name]
     del self._apps[app_name]
     return app
 
-
   def get_all_apps(self):
-    """get_all_apps() -> List of DesktopApp"""
-    return self._apps.values()
-
+    """get_all_apps() -> List of HueApp"""
+    return list(self._apps.values())
 
   def save(self):
     """Save and write out the registry"""
     assert self._initialized, "Registry not yet initialized"
 
-    tmp_path = self._reg_path + '.new'
-    self._write(tmp_path)
-    os.rename(tmp_path, self._reg_path)
+    self._write(self._reg_path)
     LOG.info('=== Saved registry at %s' % (self._reg_path,))
 
 
-class DesktopApp(object):
+class HueApp(object):
   """
   Represents an app.
+
+  Path provided should be absolute or relative to common.APPS_ROOT
   """
   @staticmethod
   def create(json):
-    return DesktopApp(json['name'], json['version'], json['path'], json['desc'])
+    return HueApp(json['name'], json['version'], json['path'], json['desc'], json['author'])
 
-  def __init__(self, name, version, path, desc):
+  def __init__(self, name, version, path, desc, author):
     self.name = name
     self.version = version
     self.path = path
     self.desc = desc
+    self.author = author
 
   def __str__(self):
-    return "%s (version %s)" % (self.name, self.version)
+    return "%s v.%s" % (self.name, self.version)
 
   def __cmp__(self, other):
-    if not isinstance(other, DesktopApp):
+    if not isinstance(other, HueApp):
       raise TypeError
     return cmp((self.name, self.version), (other.name, other.version))
 
+  @property
+  def rel_path(self):
+    if os.path.isabs(self.path):
+      return os.path.relpath(self.path, common.APPS_ROOT)
+    else:
+      return self.path
+
+  @property
+  def abs_path(self):
+    if not os.path.isabs(self.path):
+      return os.path.abspath(os.path.join(common.APPS_ROOT, self.path))
+    else:
+      return self.path
+
+  def use_rel_path(self):
+    self.path = self.rel_path
+
+  def use_abs_path(self):
+    self.path = self.abs_path
+
   def jsonable(self):
-    return dict(name=self.name, version=self.version, path=self.path, desc=self.desc)
+    return dict(name=self.name, version=self.version, path=self.path,
+                desc=self.desc, author=self.author)
 
   def find_ext_pys(self):
     """find_ext_pys() -> A list of paths for all ext-py packages"""
-    return glob.glob(os.path.join(self.path, 'ext-py', '*'))
+    return glob.glob(os.path.join(self.abs_path, 'ext-py', '*'))
+
+  def get_conffiles(self):
+    """get_conffiles() -> A list of config (.ini) files"""
+    return glob.glob(os.path.join(self.abs_path, 'conf', '*.ini'))
 
 
-class AppJsonEncoder(simplejson.JSONEncoder):
+  def install_conf(self):
+    """
+    install_conf() -> True/False
+
+    Symlink the app's conf/*.ini files into the conf directory.
+    """
+    installed = [ ]
+
+    for target in self.get_conffiles():
+      link_name = os.path.join(common.HUE_CONF_DIR, os.path.basename(target))
+
+      # Does the link already exists?
+      if os.path.islink(link_name):
+        try:
+          cur = os.readlink(link_name)
+          if cur == target:
+            LOG.warn("Symlink for configuration already exists: %s" % (link_name,))
+            installed.append(link_name)
+            continue
+          # Remove broken link
+          if not os.path.exists(cur):
+            os.unlink(link_name)
+            LOG.warn("Removing broken link: %s" % (link_name,))
+        except OSError as ex:
+          LOG.warn("Error checking for existing link %s: %s" % (link_name, ex))
+
+      # Actually install the link
+      try:
+        os.symlink(target, link_name)
+        LOG.info('Symlink config %s -> %s' % (link_name, target))
+        installed.append(link_name)
+      except OSError as ex:
+        LOG.error("Failed to symlink %s to %s: %s" % (target, link_name, ex))
+        for lnk in installed:
+          try:
+            os.unlink(lnk)
+          except OSError as ex2:
+            LOG.error("Failed to cleanup link %s: %s" % (link_name, ex2))
+        return False
+    return True
+
+
+  def uninstall_conf(self):
+    """uninstall_conf() -> True/False"""
+    app_conf_dir = os.path.abspath(os.path.join(self.abs_path, 'conf'))
+    if not os.path.isdir(app_conf_dir):
+      return True
+
+    # Check all symlink in the conf dir and remove any that point to this app
+    for name in os.listdir(common.HUE_CONF_DIR):
+      path = os.path.join(common.HUE_CONF_DIR, name)
+      if not os.path.islink(path):
+        continue
+      target = os.readlink(path)
+      target_dir = os.path.abspath(os.path.dirname(target))
+      if target_dir == app_conf_dir:
+        try:
+          os.unlink(path)
+          LOG.info('Remove config symlink %s -> %s' % (path, target))
+        except OSError as ex:
+          LOG.error("Failed to remove configuration link %s: %s" % (path, ex))
+          return False
+    return True
+
+
+class AppJsonEncoder(json.JSONEncoder):
   def __init__(self, **kwargs):
-    simplejson.JSONEncoder.__init__(self, **kwargs)
+    json.JSONEncoder.__init__(self, **kwargs)
 
   def default(self, obj):
-    if isinstance(obj, DesktopApp):
+    if isinstance(obj, HueApp):
       return obj.jsonable()
-    return simplejson.JSONEncoder.default(self, obj)
+    return json.JSONEncoder.default(self, obj)

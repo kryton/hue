@@ -17,16 +17,80 @@
 #
 # Extra form fields and widgets.
 
+from future import standard_library
+standard_library.install_aliases()
+from builtins import filter
+from builtins import range
+from builtins import object
+import logging
+import json
+import sys
+
 from django.forms import Widget, Field
 from django import forms
-from django.forms.util import ErrorList, ValidationError, flatatt
+from django.forms.utils import ErrorList, ValidationError, flatatt
 from django.forms.fields import MultiValueField, CharField, ChoiceField, BooleanField
 from django.forms.widgets import MultiWidget, Select, TextInput, Textarea, HiddenInput, Input
+from django.utils import formats
 from django.utils.safestring import mark_safe
-from django.utils.encoding import StrAndUnicode, force_unicode
+from django.utils.encoding import python_2_unicode_compatible
 
-import simplejson
-import urllib
+import desktop.lib.i18n
+from desktop.lib.i18n import smart_str
+
+if sys.version_info[0] > 2:
+  import urllib.request, urllib.error
+  from urllib.parse import quote_plus as urllib_quote_plus
+  from django.utils.encoding import force_text as force_unicode
+else:
+  from urllib import quote_plus as urllib_quote_plus
+  from django.utils.encoding import force_unicode
+
+LOG = logging.getLogger(__name__)
+
+try:
+  from django.utils.encoding import StrAndUnicode
+except ImportError:
+  from django.utils.encoding import python_2_unicode_compatible
+
+  @python_2_unicode_compatible
+  class StrAndUnicode(object):
+    def __str__(self):
+      return self.code
+
+class SplitDateTimeWidget(forms.MultiWidget):
+  """
+  A Widget that splits datetime input into two <input type="text"> boxes.
+  The date_class and time_class attributes specify class names to be given
+  specifically to the corresponding DateInput and TimeInput widgets.
+  """
+  date_format = formats.get_format('DATE_INPUT_FORMATS')[0]
+  time_format = formats.get_format('TIME_INPUT_FORMATS')[0]
+
+  def __init__(self, attrs=None, date_format=None, time_format=None, date_class='date', time_class='time'):
+    date_attrs = dict(attrs)
+    time_attrs = dict(attrs)
+    if 'class' in date_attrs:
+      date_classes = [clss for clss in date_attrs['class'].split() if clss != date_class]
+      date_classes.append(date_class)
+      date_attrs['class'] = ' '.join(date_classes)
+    else:
+      date_attrs['class'] = date_class
+    if 'class' in time_attrs:
+      time_classes = [clss for clss in time_attrs['class'].split() if clss != time_class]
+      time_classes.append(time_class)
+      time_attrs['class'] = ' '.join(time_classes)
+    else:
+      time_attrs['class'] = time_class
+    widgets = (forms.DateInput(attrs=date_attrs, format=date_format),
+               forms.TimeInput(attrs=time_attrs, format=time_format))
+    del attrs['class']
+    super(SplitDateTimeWidget, self).__init__(widgets, attrs)
+
+  def decompress(self, value):
+    if value:
+      return [value.date(), value.time().replace(microsecond=0)]
+    return [None, None]
 
 class MultipleInputWidget(Widget):
   """
@@ -61,7 +125,7 @@ class MultipleInputWidget(Widget):
     # Sometimes this is a QueryDict, and sometimes ar regular dict,
     # so we adapt:
     non_empty = lambda x: len(x) != 0
-    return filter(non_empty, data.getlist(name))
+    return list(filter(non_empty, data.getlist(name)))
 
 class MultipleInputField(Field):
   widget = MultipleInputWidget
@@ -136,7 +200,7 @@ class KeyValueWidget(Textarea):
   def render(self, name, value, attrs=None):
     # If we have a dictionary, render back into a string.
     if isinstance(value, dict):
-      value = " ".join("=".join([k, v]) for k, v in value.iteritems())
+      value = " ".join("=".join([k, v]) for k, v in value.items())
     return super(KeyValueWidget, self).render(name, value, attrs)
 
 class KeyValueField(CharField):
@@ -157,6 +221,38 @@ class KeyValueField(CharField):
       return dict(kvpair.split('=', 2) for kvpair in value.split())
     except Exception:
       raise ValidationError("Not in key=value format.")
+
+class UnicodeEncodingField(ChoiceOrOtherField):
+  """
+  The cleaned value of the field is the actual encoding, not a tuple
+  """
+  CHOICES = [
+    ('utf-8', 'Unicode UTF8'),
+    ('utf-16', 'Unicode UTF16'),
+    ('latin_1', 'Western ISO-8859-1'),
+    ('latin_9', 'Western ISO-8859-15'),
+    ('cyrillic', 'Cryrillic'),
+    ('arabic', 'Arabic'),
+    ('greek', 'Greek'),
+    ('hebrew', 'Hebrew'),
+    ('shift_jis', 'Japanese (Shift-JIS)'),
+    ('euc-jp', 'Japanese (EUC-JP)'),
+    ('iso2022_jp', 'Japanese (ISO-2022-JP)'),
+    ('euc-kr', 'Korean (EUC-KR)'),
+    ('iso2022-kr', 'Korean (ISO-2022-KR)'),
+    ('gbk', 'Chinese Simplified (GBK)'),
+    ('big5hkscs', 'Chinese Traditional (Big5-HKSCS)'),
+    ('ascii', 'ASCII'),
+  ]
+
+  def __init__(self, initial=None, *args, **kwargs):
+    ChoiceOrOtherField.__init__(self, UnicodeEncodingField.CHOICES, initial, *args, **kwargs)
+
+  def clean(self, value):
+    encoding = value[0] == OTHER_VAL and value[1] or value[0]
+    if encoding and not desktop.lib.i18n.validate_encoding(encoding):
+      raise forms.ValidationError("'%s' encoding is not available" % (encoding,))
+    return encoding
 
 
 class MultiForm(object):
@@ -189,12 +285,12 @@ class MultiForm(object):
   def get_subforms(self):
     """get_subforms() -> An iterator over (name, subform)"""
     assert self._is_bound
-    return self._forms.iteritems()
+    return iter(self._forms.items())
 
   def has_subform_data(self, subform_name, data):
     """Test if data contains any information bound for the subform"""
     prefix = self.add_prefix(subform_name)
-    return len([ k.startswith(prefix) for k in data.keys() ]) != 0
+    return len([ k.startswith(prefix) for k in list(data.keys()) ]) != 0
 
   def add_subform(self, name, form_cls, data=None):
     """Dynamically extend this MultiForm to include a new subform"""
@@ -204,20 +300,23 @@ class MultiForm(object):
   def remove_subform(self, name):
     """Dynamically remove a subform. Raises KeyError."""
     del self._form_types[name]
-    if self._forms.has_key(name):
+    if name in self._forms:
       del self._forms[name]
 
-  def bind(self, data=None):
+  def bind(self, data=None, instances=None):
     self._is_bound = True
     self._forms = {}
-    for key, form_cls in self._form_types.iteritems():
-      self._bind_one(key, form_cls, data)
+    for key, form_cls in self._form_types.items():
+      instance = instances is not None and instances.get(key) or None
+      self._bind_one(key, form_cls, data, instance=instance)
 
-  def _bind_one(self, key, form_cls, data=None):
+  def _bind_one(self, key, form_cls, data=None, instance=None):
     prefix = self.add_prefix(key)
     if issubclass(form_cls, MultiForm):
       member = form_cls(prefix=prefix)
       member.bind(data=data)
+    elif instance is not None:
+      member = form_cls(data=data, prefix=prefix, instance=instance)
     else:
       member = form_cls(data=data, prefix=prefix)
     self._forms[key] = member
@@ -231,8 +330,9 @@ class MultiForm(object):
     r = True
     # Explicitly iterate through all of them; we don't want
     # to abort early, since we want each form's is_valid to be run.
-    for f in self._forms.values():
+    for f in list(self._forms.values()):
       if not f.is_valid():
+        LOG.error(smart_str(f.errors))
         r = False
     return r
 
@@ -245,7 +345,12 @@ class SubmitButton(Input):
   def render(self, name, value, attrs=None):
     if value is None:
       value = 'True'
-    final_attrs = self.build_attrs(attrs, type=self.input_type, name=name, value=value)
+
+    extra_attrs = dict(type=self.input_type, name=name)
+    if self.attrs:
+      extra_attrs.update(self.attrs)
+    final_attrs = self.build_attrs(attrs, extra_attrs=extra_attrs)
+
     if value != '':
       # Only add the 'value' attribute if a value is non-empty.
       final_attrs['value'] = force_unicode(value)
@@ -379,7 +484,7 @@ class BaseSimpleFormSet(StrAndUnicode):
       self._errors.append(f.errors)
     try:
       self.clean()
-    except ValidationError, e:
+    except ValidationError as e:
       self._non_form_errors = e.messages
 
   @property
@@ -415,10 +520,10 @@ def simple_formset_factory(form, add_label="+", formset=BaseSimpleFormSet, initi
 
 class DependencyAwareForm(forms.Form):
   """
-  Inherit from this class and add 
+  Inherit from this class and add
   (condition name, condition value, child name) tuples
   to self.dependencies to describe dependencies between
-  certain form feilds.  
+  certain form fields.
 
   The semantic meaning is that the field named "child name"
   is required if and only if the field "condition name"
@@ -431,7 +536,7 @@ class DependencyAwareForm(forms.Form):
     if self.errors:
       return
     for cond, required_value, child in self.dependencies:
-      if self.cleaned_data.get(cond) == required_value:
+      if self.cleaned_data.get(cond, None) == required_value:
         child_val = self.cleaned_data.get(child)
         if child_val in [None, '']:
           self._errors.setdefault(child, []).append("%s is required if %s is %s" % (child, cond, str(required_value)))
@@ -448,4 +553,4 @@ class DependencyAwareForm(forms.Form):
     return [ data(*x) for x in self.dependencies ]
 
   def render_dep_metadata(self):
-    return urllib.quote_plus(simplejson.dumps(self._calculate_data(), separators=(',', ':')))
+    return urllib_quote_plus(json.dumps(self._calculate_data(), separators=(',', ':')))

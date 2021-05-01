@@ -16,27 +16,82 @@
 # limitations under the License.
 
 import logging
-from desktop.lib.django_util import PopupException
+
+from django.utils.translation import ugettext as _
+
+from desktop.auth.backend import is_admin
+from desktop.lib.exceptions_renderable import PopupException
+from desktop.lib.django_util import JsonResponse
+from desktop.lib.i18n import force_unicode
 
 try:
   from functools import wraps
 except ImportError:
   from django.utils.functional import wraps
 
+
 LOG = logging.getLogger(__name__)
 
-def desktop_permission_required(action, app):
+
+def hue_permission_required(action, app):
   """
-  Checks that the user has permissions to do
-  action 'action' on app 'app'.
+  Checks that the user has permissions to do action 'action' on app 'app'.
 
   Note that user must already be logged in.
   """
   def decorator(view_func):
     @wraps(view_func)
     def decorated(request, *args, **kwargs):
-      if not request.user.has_desktop_permission(action, app):
-        raise PopupException("Permission denied (%s/%s)" % (action, app))
+      if not request.user.has_hue_permission(action, app):
+        raise PopupException(_("Permission denied (%(action)s/%(app)s).") % {'action': action, 'app': app})
       return view_func(request, *args, **kwargs)
     return decorated
+  return decorator
+
+
+def check_superuser_permission(view_func):
+  def decorate(request, *args, **kwargs):
+    if not is_admin(request.user):
+      raise PopupException(_('You must be a superuser to perform this operation.'), error_code=401)
+    return view_func(request, *args, **kwargs)
+  return wraps(view_func)(decorate)
+
+
+def check_document_access_permission():
+  def inner(view_func):
+    def decorate(request, *args, **kwargs):
+      doc_id = {}
+
+      try:
+        if request.GET.get('uuid'):
+          doc_id['uuid'] = request.GET.get('uuid')
+        elif 'doc_id' in kwargs:
+          doc_id['id'] = kwargs['doc_id']
+
+        if doc_id:
+          from desktop.models import Document2
+          doc2 = Document2.objects.get(**doc_id)
+          doc2.doc.get().can_read_or_exception(request.user)
+      except Document2.DoesNotExist:
+        raise PopupException(_('Job %(id)s does not exist') % {'id': doc_id})
+
+      return view_func(request, *args, **kwargs)
+    return wraps(view_func)(decorate)
+  return inner
+
+
+def api_error_handler(func):
+  def decorator(*args, **kwargs):
+    response = {}
+
+    try:
+      return func(*args, **kwargs)
+    except Exception as e:
+      LOG.exception('Error running %s' % func)
+      response['status'] = -1
+      response['message'] = force_unicode(str(e))
+    finally:
+      if response:
+        return JsonResponse(response)
+
   return decorator
