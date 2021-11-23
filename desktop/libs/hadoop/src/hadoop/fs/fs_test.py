@@ -15,14 +15,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import os
+import stat
 import tempfile
 import unittest
-import logging
 
-from hadoop import fs
+from hadoop import fs, pseudo_hdfs4
+from nose.plugins.attrib import attr
+from nose.tools import assert_equal, assert_true
+
 
 logger = logging.getLogger(__name__)
+
 
 class LocalSubFileSystemTest(unittest.TestCase):
   def setUp(self):
@@ -90,6 +95,89 @@ class LocalSubFileSystemTest(unittest.TestCase):
   def test_keyword_args(self):
     # This shouldn't work!
     self.assertRaises(TypeError, self.fs.open, name="/foo", mode="w")
+
+
+@attr('integration')
+@attr('requires_hadoop')
+def test_hdfs_copy():
+  minicluster = pseudo_hdfs4.shared_cluster()
+  minifs = minicluster.fs
+
+  copy_test_src = minicluster.fs_prefix + '/copy_test_src'
+  copy_test_dst = minicluster.fs_prefix + '/copy_test_dst'
+  try:
+    data = "I will not make flatulent noises in class\n" * 2000
+    minifs.create(copy_test_src, permission=0o646, data=data)
+    minifs.create(copy_test_dst, data="some initial data")
+
+    minifs.copyfile(copy_test_src, copy_test_dst)
+    actual = minifs.read(copy_test_dst, 0, len(data) + 100)
+    assert_equal(data, actual)
+
+    sb = minifs.stats(copy_test_dst)
+    assert_equal(0o646, stat.S_IMODE(sb.mode))
+  finally:
+    minifs.do_as_superuser(minifs.rmtree, copy_test_src)
+    minifs.do_as_superuser(minifs.rmtree, copy_test_dst)
+
+
+@attr('integration')
+@attr('requires_hadoop')
+def test_hdfs_full_copy():
+  minicluster = pseudo_hdfs4.shared_cluster()
+  minifs = minicluster.fs
+  minifs.setuser('test')
+
+  prefix = minicluster.fs_prefix + '/copy_test'
+  try:
+    minifs.mkdir(prefix)
+    minifs.mkdir(prefix + '/src')
+    minifs.mkdir(prefix + '/dest')
+
+    # File to directory copy.
+    # No guarantees on file permissions at the moment.
+    data = "I will not make flatulent noises in class\n" * 2000
+    minifs.create(prefix + '/src/file.txt', permission=0o646, data=data)
+    minifs.copy(prefix + '/src/file.txt', prefix + '/dest')
+    assert_true(minifs.exists(prefix + '/dest/file.txt'))
+
+    # Directory to directory copy.
+    # No guarantees on directory permissions at the moment.
+    minifs.copy(prefix + '/src', prefix + '/dest', True)
+    assert_true(minifs.exists(prefix + '/dest/src'))
+
+    # Copy directory to file should fail.
+    try:
+      minifs.copy(prefix + '/src', prefix + '/dest/file.txt', True)
+    except IOError:
+      pass
+    except Exception:
+      raise
+  finally:
+    minifs.do_as_superuser(minifs.rmtree, prefix)
+
+
+@attr('integration')
+@attr('requires_hadoop')
+def test_hdfs_copy_from_local():
+  minicluster = pseudo_hdfs4.shared_cluster()
+  minifs = minicluster.fs
+  minifs.setuser('test')
+
+  path = os.path.join(tempfile.gettempdir(), 'copy_test_src')
+  logging.info(path)
+
+  data = "I will not make flatulent noises in class\n" * 2000
+  f = open(path, 'w')
+  f.write(data)
+  f.close()
+
+  copy_dest = minicluster.fs_prefix + '/copy_test_dst'
+
+  minifs.copyFromLocal(path, copy_dest)
+  actual = minifs.read(copy_dest, 0, len(data) + 100)
+  assert_equal(data, actual)
+
 
 if __name__ == "__main__":
   logging.basicConfig()

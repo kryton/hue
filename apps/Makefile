@@ -30,19 +30,7 @@ default: env-install
 
 .PHONY: clean default distclean install
 
-APPS := about \
-	beeswax \
-	filebrowser \
-	help \
-	jobbrowser \
-	jobsub \
-	proxy \
-	useradmin
-
-# <<<< SDK ONLY
-APPS += hello \
-	jframegallery
-# END SDK ONLY >>>>
+APPS := $(shell find . -maxdepth 2 -name "src" -type d|cut -d"/" -f2|sort)
 
 ################################################
 # Install all applications into the Desktop environment
@@ -53,7 +41,7 @@ EGG_INFO_TARGETS := $(APPS:%=.recursive-egg-info/%)
 
 .PHONY: env-install
 env-install: $(EGG_INFO_TARGETS)
-	$(APP_REG) --install $(APPS)
+	$(APP_REG) --install $(APPS) --relative-paths
 
 
 ################################################
@@ -61,9 +49,7 @@ env-install: $(EGG_INFO_TARGETS)
 ################################################
 INSTALL_BDIST_TARGETS := $(APPS:%=.recursive-install-bdist/%)
 .recursive-install-bdist/%: %
-	INSTALL_DIR=$(INSTALL_DIR)/apps/$< \
-		INSTALL_CONF_DIR=$(INSTALL_DIR)/desktop/conf \
-		$(MAKE) -C $< install-bdist
+	INSTALL_DIR=$(INSTALL_DIR)/apps/$< $(MAKE) -C $< install-bdist
 
 .PHONY: install
 install: install-source-parts $(INSTALL_BDIST_TARGETS)
@@ -85,6 +71,7 @@ install-source-parts:
 ################################################
 CLEAN_TARGETS := $(APPS:%=.recursive-clean/%)
 DISTCLEAN_TARGETS := $(APPS:%=.recursive-distclean/%)
+EXT_CLEAN_TARGETS := $(APPS:%=.recursive-ext-clean/%)
 
 clean: $(CLEAN_TARGETS)
 .recursive-clean/%:
@@ -95,3 +82,34 @@ distclean: $(DISTCLEAN_TARGETS)
 .recursive-distclean/%:
 	@$(MAKE) -C $* distclean
 	@$(APP_REG) --remove $* ||:
+
+ext-clean: $(EXT_CLEAN_TARGETS)
+.recursive-ext-clean/%:
+	@$(MAKE) -C $* ext-clean
+
+
+################################################
+# Internationalization
+################################################
+I18N_APPS := about \
+  beeswax \
+  metastore \
+  filebrowser \
+  jobbrowser \
+  jobsub \
+  useradmin \
+  oozie \
+  impala \
+  pig \
+  search \
+  hbase \
+  sqoop \
+  zookeeper \
+  rdbms \
+  spark \
+  hive
+
+COMPILE_LOCALE_TARGETS := $(I18N_APPS:%=.recursive-compile-locales/%)
+compile-locales: $(COMPILE_LOCALE_TARGETS)
+.recursive-compile-locales/%:
+	@$(MAKE) -C $* compile-locale

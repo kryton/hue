@@ -15,21 +15,38 @@
 ## limitations under the License.
 <%!
   from desktop.lib.django_util import extract_field_data
+  from django.utils.translation import ugettext as _
 %>
 
-<%def name="field(
-  field, 
-  render_default=False, 
-  hidden=False, 
-  notitle=False, 
-  tag='input', 
-  klass=None, 
-  attrs=None, 
-  value=None, 
-  help=False, 
-  help_attrs=None, 
-  dd_attrs=None, 
-  dt_attrs=None, 
+<%def name="getEllipsifiedCell(val, placement='bottom', klass='')">
+  % if len(val) > 25:
+    <td class="${ klass }" rel="tooltip" title="${ val[:300] }" data-placement="${ placement }" >${ (val[:25]) }&hellip;</td>
+  % else:
+    <td class="${ klass }">${ val }</td>
+  % endif
+</%def>
+
+<%def name="fieldName(field)">
+</%def>
+
+<%def name="bootstrapLabel(field)">
+    <label for="${field.html_name | n}" class="control-label">${field.label}</label>
+</%def>
+
+<%def name="label(
+  field,
+  render_default=False,
+  data_filters=None,
+  hidden=False,
+  notitle=False,
+  tag='input',
+  klass=None,
+  attrs=None,
+  value=None,
+  help=False,
+  help_attrs=None,
+  dd_attrs=None,
+  dt_attrs=None,
   title_klass=None,
   button_text=False
   )">
@@ -44,7 +61,7 @@
     for key, value in attributes.iteritems():
       if key == "klass":
         key = "class"
-      ret_str += "%s='%s'" % (key.replace("_", "-"), str(value))
+      ret_str += "%s='%s'" % (key.replace("_", "-"), unicode(value))
     return ret_str
 
   if not attrs:
@@ -52,79 +69,158 @@
   if not render_default:
     attrs.setdefault('type', 'text')
 
+  if data_filters:
+    attrs.data_filters = data_filters
+
   classes = []
   if klass:
     classes.append(klass)
-  if hidden: 
-    classes.append("ccs-hidden")
+  if hidden:
+    classes.append("hide")
   cls = ' '.join(classes)
 
   title_classes = []
   if title_klass:
     title_classes.append(title_klass)
   if notitle or hidden:
-    title_classes.append("ccs-hidden")
+    title_classes.append("hide")
   titlecls = ' '.join(title_classes)
 %>
-  % if field.is_hidden:
-    ${str(field) | n}
-  % else:
-    <dt class="${titlecls}" ${make_attr_str(dt_attrs) | n}>${field.label_tag() | n}</dt>
-    <dd class="${cls}" ${make_attr_str(dd_attrs) | n}>
-      % if render_default:
-        ${str(field) | n}
-      % else:
-        % if tag == 'textarea':
-          <textarea name="${field.html_name | n}" ${make_attr_str(attrs) | n} />${extract_field_data(field) or ''}</textarea>
-        % elif tag == 'button':
-          <button name="${field.html_name | n}" ${make_attr_str(attrs) | n} value="${value}"/>${button_text or field.name or ''}</button>
-        % elif tag == 'checkbox':
-          <input type="checkbox" name="${field.html_name | n}" ${make_attr_str(attrs) | n} ${value and "CHECKED" or ""}/>${button_text or field.name or ''}</input>
+${field.label_tag() | n}
+</%def>
+
+
+<%def name="field(
+  field,
+  render_default=False,
+  data_filters=None,
+  hidden=False,
+  notitle=False,
+  tag='input',
+  klass=None,
+  attrs=None,
+  value=None,
+  help=False,
+  help_attrs=None,
+  dd_attrs=None,
+  dt_attrs=None,
+  title_klass=None,
+  button_text=False,
+  placeholder=None,
+  file_chooser=False,
+  show_errors=True
+  )">
+<%
+  if value is None:
+    value = extract_field_data(field)
+
+  def make_attr_str(attributes):
+    if attributes is None:
+      attributes = {}
+    ret_str = ""
+    for key, value in attributes.iteritems():
+      if key == "klass":
+        key = "class"
+      ret_str += "%s='%s' " % (key.replace("_", "-"), unicode(value))
+    return ret_str
+
+  if not attrs:
+    attrs = {}
+  if not render_default:
+    attrs.setdefault('type', 'text')
+
+  if data_filters:
+    attrs.data_filters = data_filters
+
+  classes = []
+  if klass:
+    classes.append(klass)
+  if hidden:
+    classes.append("hide")
+  cls = ' '.join(classes)
+
+  title_classes = []
+  if title_klass:
+    title_classes.append(title_klass)
+  if notitle or hidden:
+    title_classes.append("hide")
+  titlecls = ' '.join(title_classes)
+
+  plc = ""
+  if placeholder:
+    plc = "placeholder=\"%s\"" % placeholder
+%>
+    % if field.is_hidden:
+        ${unicode(field) | n}
+    % else:
+        % if render_default:
+            ${unicode(field) | n}
         % else:
-          <${tag} name="${field.html_name | n}" value="${extract_field_data(field) or ''}" ${make_attr_str(attrs) | n} />
+            % if tag == 'textarea':
+                <textarea name="${field.html_name | n}" ${make_attr_str(attrs) | n} class="${cls}" />${extract_field_data(field) or ''}</textarea>
+            % elif tag == 'button':
+                <button name="${field.html_name | n}" ${make_attr_str(attrs) | n} value="${value}"/>${button_text or field.name or ''}</button>
+            % elif tag == 'checkbox':
+                % if help:
+                    <input type="checkbox" name="${field.html_name | n}" ${make_attr_str(attrs) | n} ${value and "CHECKED" or ""}/ /> <span rel="tooltip" data-original-title="${help}" >${button_text or field.name or ''}</span>
+                % else:
+                    <input type="checkbox" name="${field.html_name | n}" ${make_attr_str(attrs) | n} ${value and "CHECKED" or ""}/> <span>${button_text or field.name or ''}</span>
+                % endif
+            % else:
+                %if file_chooser:
+                    <${tag} name="${field.html_name | n}" value="${extract_field_data(field) or ''}" ${make_attr_str(attrs) | n} class="${cls}" ${plc | n,unicode} /><a class="btn fileChooserBtn" href="#" data-filechooser-destination="${field.html_name | n}">..</a>
+                %else:
+                    <${tag} name="${field.html_name | n}" value="${extract_field_data(field) or ''}" ${make_attr_str(attrs) | n} class="${cls}" ${plc | n,unicode} />
+                %endif
+            % endif
         % endif
-      % endif
-      % if help:
-        <p class="ccs-help_text" ${make_attr_str(help_attrs) | n}>${help}</p>
-      % endif
-    </dd>
-    % if len(field.errors):
-      <dd class="beeswax_error ccs-error">
-         ${str(field.errors) | n}
-       </dd>
+        % if show_errors and len(field.errors):
+            ${unicode(field.errors) | n}
+        % endif
     % endif
-  % endif
 </%def>
 
 
 <%def name="pageref(num)">
   % if hasattr(filter_params, "urlencode"):
-    href="?page=${num}&${filter_params.urlencode()}"
+    href="?q-page=${num}&${filter_params.urlencode()}"
   % else:
-    href="?page=${num}&${filter_params}"
+    href="?q-page=${num}&${filter_params}"
   % endif
 </%def>
+
 <%def name="prevpage(page)">
   ${pageref(page.previous_page_number())}
 </%def>
+
 <%def name="nextpage(page)">
   ${pageref(page.next_page_number())}
 </%def>
+
 <%def name="toppage(page)">
   ${pageref(1)}
 </%def>
+
 <%def name="bottompage(page)">
-  ${pageref(page.num_pages())}
+  ${pageref(paginator.num_pages)}
 </%def>
+
 <%def name="pagination(page)">
-  <div class="toolbar bw-designs_toolbar bw-navigation">
-    <p class="bw-showing_msg">Showing ${page.start_index()} to ${page.end_index()} of ${page.total_count()} items</p>
-    <div class="bw-nav_links">
-      <a title="Beginning of List" ${toppage(page)} class="bw-firstBlock">Beginning of List</a>
-      <a title="Previous Page" ${prevpage(page)} class="bw-prevBlock">Previous Page</a>
-      <p>page ${page.number} of ${page.num_pages()}</p>
-      <a title="Next page" ${nextpage(page)} class="bw-nextBlock">Next Page</a>
-      <a title="End of List" ${bottompage(page)} class="bw-lastBlock">End of List</a>
+    <div class="pagination">
+        <ul class="pull-right">
+            <li class="prev"><a title="${_('Beginning of List')}" ${toppage(page)}>&larr; ${_('Beginning of List')}</a></li>
+            % if page and page.has_previous():
+            <li><a title="${_('Previous Page')}" ${prevpage(page)}>${_('Previous Page')}</a></li>
+            % endif
+            % if page and page.has_next():
+            <li><a title="${_('Next page')}" ${nextpage(page)}>${_('Next Page')}</a></li>
+            % endif
+            <li class="next"><a title="${_('End of List')}" ${bottompage(page)}>${_('End of List')} &rarr;</a></li>
+        </ul>
+        % if page:
+          <p>${_('Showing %(start)s to %(end)s of %(count)s items, page %(page)s of %(pages)s') % dict(start=page.start_index(),end=page.end_index(),count=paginator.count,page=page.number,pages=paginator.num_pages)}</p>
+        % else:
+          <p>${_('Showing %(start)s to %(end)s of %(count)s items, page %(page)s of %(pages)s') % dict(start=0,end=0,count=paginator.count,page=0,pages=paginator.num_pages)}</p>
+        % endif
     </div>
-  </div>
 </%def>

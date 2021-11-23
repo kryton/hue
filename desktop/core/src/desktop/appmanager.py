@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import os
 import logging
 import re
@@ -23,8 +24,9 @@ import traceback
 import pkg_resources
 
 import desktop
-import desktop.lib.apputil
 from desktop.lib.paths import get_desktop_root
+
+from django.utils.translation import ugettext as _
 
 # Directories where apps and libraries are to be found
 APP_DIRS = [get_desktop_root('core-apps'),
@@ -37,8 +39,7 @@ LOG = logging.getLogger(__name__)
 # Global variables set after calling load_apps()
 ######################################################################
 
-# List of DesktopModuleInfo that have been loaded and skipped
-SKIPPED_APPS = None
+# List of DesktopModuleInfo that have been loaded
 DESKTOP_LIBS = None
 DESKTOP_APPS = None
 DESKTOP_MODULES = [ ]           # Sum of APPS and LIBS
@@ -52,7 +53,7 @@ def _import_module_or_none(module):
   try:
     __import__(module)
     return sys.modules[module]
-  except ImportError, ie:
+  except ImportError as ie:
     # If the exception came from us importing, we want to just
     # return None. We need to inspect the stack, though, so we properly
     # reraise in the case that the module we're importing triggered
@@ -91,8 +92,18 @@ class DesktopModuleInfo(object):
     module.  Static directories, settings, urls, etc.
     will be found based on that module.
     """
+
+    # For clarification purposes, all of these different names need a
+    # bit of explanation. The name is the actual name of the application.
+    # The display name is used by dump_config, and will either be the
+    # app name or the config key, if the config key has been defined in the
+    # app's settings.  Mostly, it's around for consistency's sake.
+    # The nice name is just a more formal name, i.e. useradmin might
+    # have a nice name of User Administration Tool, or something
+    # similarly flowery.
     self.module = module
     self.name = module.__name__
+    self.display_name = module.__name__
 
     # Set up paths
     module_root = os.path.dirname(module.__file__)
@@ -106,9 +117,24 @@ class DesktopModuleInfo(object):
     else:
       self.nice_name = self.name
 
+    if hasattr(self.settings, "ICON"):
+        self.icon_path = self.settings.ICON
+    else:
+        self.icon_path = ""
+
+    if hasattr(self.settings, "MENU_INDEX"):
+        self.menu_index = self.settings.MENU_INDEX
+    else:
+        self.menu_index = 999
+
+    self.is_url_namespaced = hasattr(self.settings, 'IS_URL_NAMESPACED')
+
+    if self.config_key is not None:
+      self.display_name = self.config_key
+
     # Look for static directory in two places:
     new_style, old_style = [ os.path.abspath(p) for p in [
-      os.path.join(module_root, "static"),
+      os.path.join(module_root, "static", self.name),
       os.path.join(self.root_dir, "static")
     ]]
 
@@ -131,15 +157,10 @@ class DesktopModuleInfo(object):
     s = _import_module_or_none(module_name)
     if s is not None:
       self.django_apps = getattr(s, 'DJANGO_APPS', [])
-      self.depender_yamls = \
-          [self._resolve_appdir_path(p) for p in getattr(s, 'DEPENDER_PACKAGE_YMLS', [])]
-      self.depender_jsons = \
-          [(depname, self._resolve_appdir_path(p))
-           for depname, p in getattr(s, 'DEPENDER_SCRIPTS_JSON', [])]
+      self.config_key = getattr(s, 'CONFIG_KEY', None)
     else:
       self.django_apps = []
-      self.depender_yamls = []
-      self.depender_jsons = []
+      self.config_key = None
 
   def _resolve_appdir_path(self, path):
     """ Takes a path relative to the application dir and returns an absolute path. """
@@ -165,19 +186,41 @@ class DesktopModuleInfo(object):
   def settings(self):
     return self._submodule("settings")
 
+  @property
+  def locale_path(self):
+    return os.path.join(os.path.dirname(self.module.__file__), 'locale')
+
+  @property
+  def migrations_path(self):
+    path = os.path.join(os.path.dirname(self.module.__file__), 'migrations')
+    if path and os.path.exists(path):
+      return path
+    else:
+      return None
+
   def _submodule(self, name):
     return _import_module_or_none(self.module.__name__ + "." + name)
 
   def __str__(self):
     return "DesktopModule(%s: %s)" % (self.nice_name, self.module.__name__)
 
+def get_apps(user):
+  return [app for app in DESKTOP_APPS if user.has_hue_permission(action="access", app=app.display_name)]
+
+def get_apps_dict(user=None):
+  if user is not None:
+    apps = get_apps(user)
+  else:
+    apps = DESKTOP_APPS
+
+  return dict([(app.name, app) for app in apps])
 
 def load_libs():
   global DESKTOP_MODULES
   global DESKTOP_LIBS
 
   if DESKTOP_LIBS is not None:
-    raise Exception("load_apps already has been called!")
+    raise Exception("load_apps already has been called.")
   DESKTOP_LIBS = [ ]
 
   for lib in pkg_resources.iter_entry_points("desktop.sdk.lib"):
@@ -193,7 +236,7 @@ def load_libs():
   DESKTOP_MODULES.append(DesktopModuleInfo(desktop))
 
 
-def load_apps():
+def load_apps(app_blacklist):
   """Loads the applications from the directories in APP_DIRS.
   Sets DESKTOP_MODULES and DJANGO_APPS globals in this module.
 
@@ -201,30 +244,24 @@ def load_apps():
   """
   global DESKTOP_MODULES
   global DESKTOP_APPS
-  global SKIPPED_APPS
 
   if DESKTOP_APPS is not None:
-    raise Exception("load_apps already has been called!")
+    raise Exception(_("load_apps has already been called."))
   DESKTOP_APPS = []
-  SKIPPED_APPS = []
-
-  hadoop_ok = desktop.lib.apputil.has_hadoop()
 
   for sdk_app in pkg_resources.iter_entry_points("desktop.sdk.application"):
-    m = sdk_app.load()
-    dmi = DesktopModuleInfo(m)
-    # If there is no hadoop installation, skips apps that requires hadoop
-    if not hadoop_ok:
-      app_settings = dmi.settings
-      # <app_module>.settings.REQUIRES_HADOOP is True by default
-      if app_settings is None or getattr(app_settings, 'REQUIRES_HADOOP', True):
-        LOG.warn('Skipping app %s because Hadoop is not found' % (sdk_app,))
-        SKIPPED_APPS.append(dmi)
-        continue
-    DESKTOP_APPS.append(dmi)
+    if sdk_app.name not in app_blacklist:
+      # TODO: Remove once pig and jobsub have been migrated to editor
+      if 'oozie' in app_blacklist and sdk_app.name in ('pig', 'jobsub'):
+        LOG.warn('%s depends on oozie which is blacklisted, will skip loading %s app.' % (sdk_app.name, sdk_app.name))
+      else:
+        m = sdk_app.load()
+        dmi = DesktopModuleInfo(m)
+        DESKTOP_APPS.append(dmi)
 
   LOG.debug("Loaded Desktop Applications: " + ", ".join(a.name for a in DESKTOP_APPS))
   DESKTOP_MODULES += DESKTOP_APPS
+
 
 def get_desktop_module(name):
   """

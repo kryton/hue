@@ -21,17 +21,17 @@ from nose.tools import assert_true, assert_equal
 
 from desktop.lib.django_test_util import make_logged_in_client
 
-def test_user_admin():
+def test_about():
   c = make_logged_in_client(username="test", is_superuser=True)
 
   # Test default output
   response = c.get('/help/')
-  assert_true("<h1>Welcome to Hue!</h1>" in response.content)
+  assert_true(b'Introducing Hue' in response.content)
 
   # Test default to index.md
-  response = c.get("/help/useradmin/")
-  response2 = c.get("/help/useradmin/index.md")
+  response = c.get("/help/about/")
+  response2 = c.get("/help/about/index.html")
   assert_equal(response.content, response2.content)
 
   # Test index at the bottom
-  assert_true('href="/help/desktop' in response.content)
+  assert_true(b'href="/help/desktop' in response.content)

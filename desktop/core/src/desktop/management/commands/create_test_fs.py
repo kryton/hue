@@ -13,18 +13,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import print_function
 import os
 
-from django.core.management.base import NoArgsCommand
+from django.core.management.base import BaseCommand
 
 from desktop.lib.paths import get_build_dir
 from hadoop.fs import fs_for_testing
+from django.utils.translation import ugettext as _
 
-class Command(NoArgsCommand):
+class Command(BaseCommand):
   """Creates file system for testing."""
-  def handle_noargs(self, **options):
+  def handle(self, *args, **options):
     fs_dir = os.path.join(get_build_dir(), "fs")
     if not os.path.isdir(fs_dir):
       os.makedirs(fs_dir)
     fs_for_testing.create(fs_dir)
-    print "Created fs in: %s" % fs_dir
+    print(_("Created fs in: %(dir)s") % {'dir': fs_dir})

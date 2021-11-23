@@ -14,16 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from setuptools import setup, find_packages
+from hueversion import VERSION
 
 setup(
       name = "jobsub",
-      version = "0.9",
+      version = VERSION,
       url = 'http://github.com/cloudera/hue',
       author = "Hue",
       description = "Hadoop Job Submission",
       packages = find_packages('src'),
       package_dir = {'': 'src'},
-      install_requires = ['setuptools', 'desktop'],
-      entry_points = { 'desktop.supervisor.specs': [ 'jobsubd = jobsub:SUPERVISOR_SPEC' ],
-                       'desktop.sdk.application': 'jobsub=jobsub' },
+      install_requires = ['setuptools', 'desktop', 'oozie'],
+      entry_points = { 'desktop.sdk.application': 'jobsub=jobsub' },
 )

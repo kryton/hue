@@ -15,109 +15,137 @@
 ## limitations under the License.
 <%
   from jobbrowser.views import get_state_link
+  from desktop.views import commonheader, commonfooter
+  from django.utils.translation import ugettext as _
 %>
 
 <%namespace name="comps" file="jobbrowser_components.mako" />
 
-  ${comps.header("Task View: Job: " + jobid, toolbar=False)}
-  <%def name="selected(val, state)">
-  %   if val is not None and state is not None and val in state:
+${ commonheader(_('Task View: Job: %(jobId)s') % dict(jobId=job.jobId_short), "jobbrowser", user, request) | n,unicode }
+${ comps.menubar() }
+
+<%def name="selected(val, state)">
+    %   if val is not None and state is not None and val in state:
         selected="true"
-  %   endif
-  </%def>
-  <%def name="pageref(num)">
-    href="?page=${num}&${filter_params}"
-  </%def>
-  <%def name="prevpage()">
-    ${pageref(page.previous_page_number())}
-  </%def>
-  <%def name="nextpage()">
-    ${pageref(page.next_page_number())}
-  </%def>
-  <%def name="toppage()">
-    ${pageref(1)}
-  </%def>
-  <%def name="bottompage()">
-    ${pageref(page.num_pages())}
-  </%def>
+    %   endif
+</%def>
 
+<div class="container-fluid">
+  <div class="card card-small">
+    <h1 class="card-heading simple">${_('Task View: Job: %(jobId)s') % dict(jobId=job.jobId_short)}</h1>
+    <div class="card-body">
+      <p>
+        <form method="get" action="${ url('jobbrowser.views.tasks', job=job.jobId) }">
+          <b>${_('Filter tasks:')}</b>
+          <select name="taskstate" class="submitter">
+            <option value="">${_('All states')}</option>
+            <option value="succeeded" ${selected('succeeded', taskstate)}>${_('succeeded')}</option>
+            <option value="running" ${selected('running', taskstate)}>${_('running')}</option>
+            <option value="failed" ${selected('failed', taskstate)}>${_('failed')}</option>
+            <option value="killed" ${selected('killed', taskstate)}>${_('killed')}</option>
+            <option value="pending" ${selected('pending', taskstate)}>${_('pending')}</option>
+          </select>
 
-  <div id="job_browser_task_list" class="view">
-    <h1 class="ccs-hidden">Tasks for Job ${jobid}</h1>
-    <div class="toolbar">
-      <a href="/jobbrowser/jobs/"><img src="/jobbrowser/static/art/icon_large.png" class="jt_icon"/></a>
-      <div class="jtv_nav">
-        <div class="ccs-inline">
-          Showing ${page.start_index()} to ${page.end_index()} of ${page.total_count()} tasks
-        </div>
-        <div class="jtv_offset_controls ccs-inline">
-          <a title="Beginning of File" class="jtv_offset_begin" ${toppage()}>Beginning of File</a>
-          <a title="Previous Block" class="jtv_offset_previous" ${prevpage()}>Previous Block</a>
-          <div class="jtv_nav_pages">page <span class="jtv_page">${page.number} of ${page.num_pages()}</span></div>
-          <a title="Next Block" class="jtv_offset_next" ${nextpage()}>Next Block</a>
-          <a title="End of File" class="jtv_offset_end" ${bottompage()}>End of File</a>
-        </div>
+          <select name="tasktype" class="submitter">
+            <option value="">${_('All types')}</option>
+            <option value="map" ${selected('map', tasktype)}>${_('maps')}</option>
+            <option value="reduce" ${selected('reduce', tasktype)}>${_('reduces')}</option>
+            <option value="job_cleanup" ${selected('job_cleanup', tasktype)}>${_('cleanups')}</option>
+            <option value="job_setup" ${selected('job_setup', tasktype)}>${_('setups')}</option>
+          </select>
 
-      </div>
-      <ul class="jt_filters">
-        <form class="jtv_filter_form submit_on_change" method="get" action="/jobbrowser/jobs/${jobid}/tasks">
-          <li class="ccs-inline">
-            <select name="taskstate">
-              <option value="">All states</option>
-              <option value="succeeded" ${selected('succeeded', taskstate)}>succeeded</option>
-              <option value="running" ${selected('running', taskstate)}>running</option>
-              <option value="failed" ${selected('failed', taskstate)}>failed</option>
-              <option value="killed" ${selected('killed', taskstate)}>killed</option>
-              <option value="pending" ${selected('pending', taskstate)}>pending</option>
-            </select>
-          </li>
-          <li class="ccs-inline">
-            <select name="tasktype">
-              <option value="">All types</option>
-              <option value="map" ${selected('map', tasktype)}>maps</option>
-              <option value="reduce" ${selected('reduce', tasktype)}>reduces</option>
-              <option value="job_cleanup" ${selected('job_cleanup', tasktype)}>cleanups</option>
-              <option value="job_setup" ${selected('job_setup', tasktype)}>setups</option>
-            </select>
-          </li>
-          <li class="ccs-inline">
-            <input type="text" name="tasktext" class="jtv_filter overtext" title="text filter"
+          <input type="text" name="tasktext"  class="submitter" title="${_('Text filter')}" placeholder="${_('Text Filter')}"
               % if tasktext:
-                value="${tasktext}"
+                 value="${tasktext}"
               % endif
-            />
-          </li>
+          />
         </form>
-      </ul>
-    </div>
-    <table class="ccs-data_table" cellpadding="0" cellspacing="0">
-      <thead>
-         <tr>
-           <th>Task ID</th>
-           <th>Type</th>
-           <th>Progress</th>
-           <th>Status</th>
-           <th>State</th>
-           <th>Start Time</th>
-           <th>End Time</th>
-           <th>View Attempts</th>
-        </tr>
-      </thead>
-      <tbody>
-        %for t in page.object_list:
-         <tr>
+      </p>
+
+      <table class="datatables table table-condensed" id="all_tasks">
+        <thead>
+          <tr>
+            <th>${_('Logs')}</th>
+            <th>${_('Task ID')}</th>
+            <th>${_('Type')}</th>
+            <th>${_('Progress')}</th>
+            <th>${_('Status')}</th>
+            <th>${_('State')}</th>
+            <th>${_('Start Time')}</th>
+            <th>${_('End Time')}</th>
+            <th>${_('View Attempts')}</th>
+          </tr>
+        </thead>
+        <tbody>
+        %for t in task_list:
+          <tr>
+            <td data-row-selector-exclude="true">
+                %if t.taskAttemptIds:
+                <a href="${ url('single_task_attempt_logs', job=t.jobId, taskid=t.taskId, attemptid=t.taskAttemptIds[-1]) }" data-row-selector-exclude="true"><i class="fa fa-tasks"></i></a>
+                %endif
+            </td>
             <td>${t.taskId_short}</td>
             <td>${t.taskType}</td>
-            <td>${"%d" % (t.progress * 100)}%</td>
-            <td><a href="${url('jobbrowser.views.tasks', jobid=jobid)}?${get_state_link(request, 'taskstate', t.state.lower())}"
-                  title="Show only ${t.state.lower()} tasks"
-                  class="frame_tip status_link ${t.state.lower()}">${t.state.lower()}</a></td>
+            <td>
+              <div class="bar">${ "%d" % (t.progress * 100) }%</div>
+            </td>
+            <td>
+              <a href="${ url('jobbrowser.views.tasks', job=job.jobId) }?${ get_state_link(request, 'taskstate', t.state.lower()) }"
+                 title="${ _('Show only %(state)s tasks') % dict(state=t.state.lower()) }"
+                 class="${ t.state.lower() }">${ t.state.lower() }
+              </a>
+            </td>
             <td>${t.mostRecentState}</td>
             <td>${t.execStartTimeFormatted}</td>
             <td>${t.execFinishTimeFormatted}</td>
-            <td><a href="/jobbrowser/jobs/${jobid}/tasks/${t.taskId}" class="jt_slide_right">Attempts</a></td>
-         </tr>
+            <td><a href="${ url('jobbrowser.views.single_task', job=job.jobId, taskid=t.taskId) }" data-row-selector="true">${_('Attempts')}</a></td>
+          </tr>
         %endfor
-      </tbody>
-    </table>
-  ${comps.footer()}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="${ static('desktop/ext/js/datatables-paging-0.1.js') }" type="text/javascript" charset="utf-8"></script>
+
+<script type="text/javascript">
+    $(document).ready(function(){
+        $("#all_tasks").dataTable({
+            "sPaginationType":"bootstrap",
+            "iDisplayLength":100,
+            "bLengthChange": false,
+            "sDom":"<'row'r>t<'row'<'span6'i><''p>>",
+            "bFilter": false,
+            "aaSorting": [[ 1, "asc" ]],
+            "aoColumns":[
+              { "bSortable":false },
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              { "bSortable":false }
+            ],
+            "oLanguage": {
+              "sEmptyTable": "${_('No data available')}",
+              "sZeroRecords": "${_('No matching records')}",
+              "sInfo":"${_('Showing _START_ to _END_ of _TOTAL_ entries')}",
+              "sInfoEmpty":"${_('Showing 0 to 0 of 0 entries')}",
+              "oPaginate":{
+                "sFirst":"${_('First')}",
+                "sLast":"${_('Last')}",
+                "sNext":"${_('Next')}",
+                "sPrevious":"${_('Previous')}"
+              }
+            },
+            "fnDrawCallback":function (oSettings) {
+              $("a[data-row-selector='true']").jHueRowSelector();
+            }
+        });
+    });
+</script>
+
+${ commonfooter(request, messages) | n,unicode }

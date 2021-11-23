@@ -13,20 +13,23 @@
 ## WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 ## See the License for the specific language governing permissions and
 ## limitations under the License.
+<%!
+from django.utils.translation import ugettext as _
+%>
 <%def name="render_error(err)">
-  <div class="ccs-error">
-    ${str(err) | n}
+  <div>
+    ${unicode(err) | n}
   </div>
 </%def>
 
 <%def name="render_field(field)">
   % if field.is_hidden:
-    ${str(field) | n}
+    ${unicode(field) | n}
   % else:
     <dt>${field.label_tag() | n}</dt>
-    <dd>${str(field) | n}</dd>
+    <dd>${unicode(field) | n}</dd>
     % if len(field.errors):
-      <dd class="ccs-error">
+      <dd>
         ${render_error(field.errors)}
       </dd>
     % endif
@@ -38,7 +41,7 @@
   % for f in formset.forms:
     ${render_form(f)}
   % endfor
-  ${str(formset.management_form) | n }
+  ${unicode(formset.management_form) | n }
   </dl>
 </%def>
 
@@ -52,21 +55,20 @@
   % endfor
 </%def>
 
-<%def name="render_query_context(query_context)">
+<%def name="render_query_context(query_context, label=None, klass='')">
   % if query_context:
     % if query_context[0] == 'table':
-      <% tablename = query_context[1] %>
-      <h2>Table:
-      <a href="${ url('beeswax.views.describe_table', tablename) }" class="bw-query_link">${tablename}</a></h2>
+      <% tablename, database = query_context[1].split(':') %>
+      <a href="${ url('metastore:describe_table', database, tablename) }" class="${ klass }">${ label or tablename }</a>
     % elif query_context[0] == 'design':
       <% design = query_context[1] %>
       % if design.is_auto:
-        <h2><a href="${ url('beeswax.views.execute_query', design.id)}" class="bw-query_link">Unsaved Query</a></h2>
+		<a href="${ url(app_name + ':execute_query', design.id)}" class="${ klass }">${ label or _('Unsaved Query')}</a>
       % else:
-        <h2><a href="${ url('beeswax.views.execute_query', design.id)}" class="bw-query_link">${design.name}</a></h2>
+        <a href="${ url(app_name + ':execute_query', design.id)}" class="${ klass }">${ label or design.name}</a>
       % endif
     % else:
-      <h2>Query Results</h2>
+      ${_('Query Results')}
     % endif
   % endif
 </%def>

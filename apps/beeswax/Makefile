@@ -20,56 +20,5 @@ ifeq ($(ROOT),)
   $(error "Error: Expect the environment variable $$ROOT to point to the Desktop installation")
 endif
 
-APP_FULL_NAME = hue-beeswax-$(APP_VERSION)
+APP_NAME = beeswax
 include $(ROOT)/Makefile.sdk
-
-###################################
-# Build beeswax
-###################################
-
-BEESWAX_ROOT := $(realpath .)
-BLD_DIR_BEESWAX=$(BEESWAX_ROOT)/build/java
-BEESWAX_JAVA_LIB := $(BEESWAX_ROOT)/java-lib
-BEESWAX_HIVE_LIB := $(BEESWAX_ROOT)/hive/lib
-
-BEESWAX := $(BEESWAX_JAVA_LIB)/BeeswaxServer.jar
-BEESWAX_JAVA_DIR := $(BEESWAX_ROOT)/java
-
-HAVE_JAVA_SRC=$(wildcard $(BEESWAX_JAVA_DIR))
-
-
-compile: $(BEESWAX)
-
-ifneq (,$(HAVE_JAVA_SRC))
-
-# If we have the source, remove it for clean
-clean::
-	rm -Rf $(BEESWAX_JAVA_LIB)
-
-
-BEESWAX_OPTS := -Dbuild.dir=$(BLD_DIR_BEESWAX) \
-	        -Dhadoop.home=$(HADOOP_HOME) \
-	        -Dhive.lib=$(BEESWAX_HIVE_LIB)
-$(BEESWAX): $(shell find $(BEESWAX_JAVA_DIR))
-	@echo "--- Building Desktop beeswax"
-	cd $(BEESWAX_JAVA_DIR) && ant $(ANT_OPTS) $(BEESWAX_OPTS) jar test-jar
-	@mkdir -p $(BEESWAX_JAVA_LIB)
-	@cp $(BLD_DIR_BEESWAX)/jar/BeeswaxServer.jar $@
-	@cp $(BLD_DIR_BEESWAX)/jar/BeeswaxTest.jar $(BEESWAX_JAVA_LIB)/BeeswaxTest.jar
-
-else
-$(BEESWAX):
-	$(error Cannot build beeswax jars without source)
-endif
-
-
-#
-# Tell the `bdist' target to exclude our java source.
-#
-BDIST_EXCLUDES += \
-	--exclude=java \
-	--exclude=thrift
-
-SDIST_EXCLUDES += \
-	--exclude=java-lib \
-	--exclude=thrift

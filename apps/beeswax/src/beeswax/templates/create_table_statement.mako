@@ -26,6 +26,10 @@ def col_type(col):
     return "array <%s>" % col["array_type"]
   elif col["column_type"] == "map":
     return "map <%s, %s>" % (col["map_key_type"], col["map_value_type"])
+  elif col["column_type"] == "char":
+    return "char(%d)" % col["char_length"]
+  elif col["column_type"] == "varchar":
+    return "varchar(%d)" % col["varchar_length"]
   return col["column_type"]
 %>\
 <%def name="column_list(columns)">\
@@ -40,23 +44,23 @@ def col_type(col):
 %   endif
   `${col["column_name"]|n}` ${col_type(col)|n} \
 %   if col.get("comment"):
-   COMMENT "${col["comment"]|n}" \
+COMMENT "${col["comment"]|n}" \
 %   endif
 % endfor
 ) \
 </%def>\
 #########################
 CREATE \
-% if not table.get("use_default_location", True):
+% if table.get("load_data", "IMPORT") == 'EXTERNAL':
 EXTERNAL \
 % endif
-TABLE `${ table["name"] | n }`
+TABLE `${ '%s.%s' % (database, table["name"]) | n }`
 ${column_list(columns)|n}
+% if table["comment"]:
+COMMENT "${table["comment"] | n}"
+% endif
 % if len(partition_columns) > 0:
 PARTITIONED BY ${column_list(partition_columns)|n}
-% endif
-% if table["comment"]:
-  COMMENT "${table["comment"] | n}"
 % endif
 ## TODO: CLUSTERED BY here
 ## TODO: SORTED BY...INTO...BUCKETS here
@@ -86,6 +90,9 @@ ROW FORMAT \
 % if table.get("file_format") == "InputFormat":
 INPUTFORMAT ${table["input_format_class"] | n} OUTPUTFORMAT ${table["output_format_class"] | n}
 % endif
-% if not table.get("use_default_location", True):
-LOCATION "${table["external_location"] | n}"
+% if table.get("load_data", "IMPORT") == 'EXTERNAL':
+LOCATION "${table["path"] | n}"
+% endif
+% if table.get("skip_header", False):
+TBLPROPERTIES("skip.header.line.count" = "1")
 % endif

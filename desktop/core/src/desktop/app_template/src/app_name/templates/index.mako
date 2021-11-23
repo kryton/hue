@@ -13,19 +13,27 @@
 ## WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 ## See the License for the specific language governing permissions and
 ## limitations under the License.
+${'<'}%!from desktop.views import commonheader, commonfooter %>
 ${'<'}%namespace name="shared" file="shared_components.mako" />
 
-${'$'}{shared.header("${" ".join(word.capitalize() for word in app_name.split("_"))}")}
+${'%'}if not is_embeddable:
+${'$'}{commonheader("${" ".join(word.capitalize() for word in app_name.split("_"))}", "${app_name}", user, request) | n,unicode}
+${'%'}endif
 
-${'#'}# use double hashes for a mako template comment
+${'$'}{shared.menubar(section='mytab')}
 
-${'#'}# this id in the div below ("index") is stripped by CCS.JFrame
-${'#'}# and passed along as the "view" argument in its onLoad event
+${'#'}# Use double hashes for a mako template comment
+${'#'}# Main body
 
-${'#'}# the class 'jframe_padded' will give the contents of your window a standard padding
-<div id="index" class="view jframe_padded">
-  <h2>${" ".join(word.capitalize() for word in app_name.split("_"))} app is successfully setup!</h2>
-  ## Pass through literal $
-  <p>It's now ${'$'}{date}.</p>
+<div class="container-fluid">
+  <div class="card">
+    <h2 class="card-heading simple">${" ".join(word.capitalize() for word in app_name.split("_"))} app is successfully setup!</h2>
+    <div class="card-body">
+      ## Pass through literal $
+      <p>It's now ${'$'}{date}.</p>
+    </div>
+  </div>
 </div>
-${'$'}{shared.footer()}
+${'%'}if not is_embeddable:
+${'$'}{commonfooter(request, messages) | n,unicode}
+${'%'}endif

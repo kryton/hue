@@ -14,10 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from setuptools import setup, find_packages
+from hueversion import VERSION
 
 setup(
       name = "desktop",
-      version = "0.9",
+      version = VERSION,
       url = 'http://github.com/cloudera/hue',
       description = "Hue core",
       packages = find_packages('src'),
@@ -25,7 +26,9 @@ setup(
       install_requires = ['setuptools'],
 
       entry_points = { 'console_scripts': [ 'supervisor = desktop.supervisor:main',
-                                            'desktop = desktop.manage_entry:entry', ],
-                       'desktop.supervisor.specs': [ 'runcpserver = desktop:SUPERVISOR_SPEC' ]
+                                            'hue = desktop.manage_entry:entry', ],
+                       'desktop.supervisor.specs': [ 'runcpserver = desktop:SUPERVISOR_SPEC',
+                                                     'kt_renewer = desktop.kt_renewer:SPEC',
+                                                     ]
                        },
       )

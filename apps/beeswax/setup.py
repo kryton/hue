@@ -14,18 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from setuptools import setup, find_packages
+from hueversion import VERSION
 
 setup(
       name = "beeswax",
-      version = "0.9",
+      version = VERSION,
       author = "Hue",
       url = 'http://github.com/cloudera/hue',
       description = "Hive Interface on Hue",
       packages = find_packages('src') + find_packages('gen-py'),
-      package_dir = {'hive_metastore': 'gen-py', 'beeswaxd': 'gen-py', 'fb303': 'gen-py', '': 'src'},
+      package_dir = {'hive_metastore': 'gen-py', 'beeswaxd': 'gen-py', 'fb303': 'gen-py', 'TCLIService': 'gen-py', '': 'src'},
       install_requires = ['setuptools', 'desktop'],
       entry_points = {
-        'desktop.sdk.application': 'beeswax=beeswax',
-        'desktop.supervisor.specs': [ 'beeswax_server = beeswax:SUPERVISOR_SPEC' ],
+        'desktop.sdk.application': 'beeswax=beeswax'
       }
 )

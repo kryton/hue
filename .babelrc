@@ -1,0 +1,27 @@
+{
+  "presets": ["@babel/preset-env"],
+  "plugins": [
+    ["module-resolver", {
+      "root": ["./desktop/core/src/desktop/js"]
+    }],
+    "@babel/plugin-syntax-dynamic-import"
+  ],
+  "overrides": [{
+    "test": "./desktop/core/src/desktop/js/parse/sqlAutocompleteParser.js",
+    "compact": false
+  },{
+    "test": "./desktop/core/src/desktop/js/parse/sqlSyntaxParser.js",
+    "compact": false
+  }],
+  "env": {
+    "test": {
+      "presets": ["@babel/preset-env"],
+      "plugins": [
+        ["module-resolver", {
+          "root": ["./desktop/core/src/desktop/js"]
+        }],
+        "@babel/plugin-syntax-dynamic-import"
+      ]
+    }
+  }
+}

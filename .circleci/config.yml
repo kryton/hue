@@ -1,0 +1,233 @@
+# Python CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-python/ for more details
+#
+version: 2
+jobs:
+  build:
+    docker:
+      # specify the version you desire here
+      # - image: circleci/python:3.8.0
+      - image: gethue/hue:latest
+
+      # Specify service dependencies here if necessary
+      # CircleCI maintains a library of pre-built images
+      # documented at https://circleci.com/docs/2.0/circleci-images/
+      # - image: circleci/postgres:9.4
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout
+
+      # Download and cache dependencies
+      # - restore_cache:
+      #     keys:
+      #       - v1-dependencies-{{ checksum "requirements.txt" }}
+      #       # fallback to using the latest cache if no exact match is found
+      #       - v1-dependencies-
+
+      # - run:
+      #     name: install dependencies
+      #     command: |
+      #       python -m venv venv
+      #       . venv/bin/activate
+      #       pip install -r requirements.txt
+
+      # - save_cache:
+      #     paths:
+      #       - ./venv
+      #     key: v1-dependencies-{{ checksum "requirements.txt" }}
+
+      # Revert to traditional pip install when build refactored, in the meantime:
+      - run:
+          name: refresh sources
+          command: |
+            rm -r /usr/share/hue/desktop/core/src/desktop
+            cp -r desktop/core/src/desktop /usr/share/hue/desktop/core/src/desktop
+
+            for lib in `ls desktop/libs`
+            do
+              rm -r /usr/share/hue/desktop/libs/$lib/src/$lib
+              cp -r desktop/libs/$lib/src/$lib /usr/share/hue/desktop/libs/$lib/src/$lib
+            done
+            for lib in `ls apps | grep -v Makefile`
+            do
+              rm -r /usr/share/hue/apps/$lib/src/$lib
+              cp -r apps/$lib/src/$lib /usr/share/hue/apps/$lib/src/$lib
+            done
+
+            rm -r /usr/share/hue/tools
+            cp -r tools /usr/share/hue
+
+            rm /usr/share/hue/desktop/conf/*.ini
+            cp desktop/conf/pseudo-distributed.ini.tmpl /usr/share/hue/desktop/conf/pseudo-distributed.ini
+
+            cd /usr/share/hue
+            # make npm-install # Not available
+            cp ~/repo/.babelrc .
+            cp ~/repo/jest.config.js .
+
+            cp ~/repo/webpack.config*.js .
+            npm install
+            npm i eslint-plugin-jest@latest --save-dev # Seems to not be found otherwise
+            npm run webpack
+            npm run webpack-login
+            npm run webpack-workers
+            ./build/env/bin/hue collectstatic --noinput
+
+            # cp -r ~/repo/docs .
+            # make doc
+            # hugo --source docs/docs-site
+
+      # Run code analyses
+      - run:
+          name: run python lints
+          command: |
+            cd ~/repo
+
+            ./tools/ci/check_for_invalid_characters.sh
+
+      - run:
+          name: run js lint
+          command: |
+            cd /usr/share/hue
+            cp ~/repo/.prettierrc .
+            cp ~/repo/.eslint* .
+            cp ~/repo/tools . -r
+
+            npm run lint
+
+      # Run tests
+      - run:
+          name: run python API tests
+          command: |
+            cd /usr/share/hue
+
+            ./build/env/bin/hue test unit --with-xunit --with-cover
+
+      - run:
+          name: run js tests
+          command: |
+            cd /usr/share/hue
+
+            # https://jestjs.io/docs/en/troubleshooting.html#tests-are-extremely-slow-on-docker-andor-continuous-integration-ci-server
+            sed -i 's/"test": "jest"/"test": "jest --runInBand"/g' package.json
+            npm run test
+
+      - store_artifacts:
+          path: test-reports
+          destination: test-reports
+
+  commit:
+    docker:
+      - image: circleci/python:3.8.0
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout
+
+      - add_ssh_keys:
+          fingerprints:
+            - "8c:68:29:28:04:80:38:31:c0:59:d9:3d:65:3e:b7:8c"
+
+      - run:
+          name: push to master
+          command: |
+            git push origin HEAD:master
+
+
+  build-py3.6:
+    docker:
+      - image: gethue/hue:latest # Should be circleci/python:3.6 at some point
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout
+
+      # Download and cache dependencies
+      # - restore_cache:
+      #     keys:
+      #       - v1-dependencies-{{ checksum "desktop/core/requirements_py3.txt" }}
+      #       # fallback to using the latest cache if no exact match is found
+      #       - v1-dependencies-
+
+      - run:
+          name: compile
+          command: |
+            apt-get install -y python3.6-dev libsnappy-dev # This should not be needed as some point
+
+            export PYTHON_VER=python3.6
+            make apps
+
+      - run:
+          name: run tests
+          command: |
+            ./build/env/bin/hue test unit --with-xunit --with-cover
+
+      # - run:
+      #     name: install dependencies
+      #     command: |
+      #       python -m venv venv
+      #       make apps
+
+      # - save_cache:
+      #     paths:
+      #       - ./build/venv
+      #     key: v1-dependencies-{{ checksum "esktop/core/requirements_py3.txt" }}
+
+
+  build-py3.8:
+    docker:
+      - image: gethue/hue:latest # Should be circleci/python:3.x at some point
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout
+
+      - run:
+          name: compile
+          command: |
+            apt-get install -y python3.8-dev python3.8-venv python3.8-distutils libsnappy-dev # This should not be needed as some point
+
+            export PYTHON_VER=python3.8
+            make apps
+
+      - run:
+          name: run tests
+          command: |
+            ./build/env/bin/hue test unit --with-xunit --with-cover
+
+
+workflows:
+  version: 2
+  run-tests-and-rebase-master:
+    jobs:
+      - build:
+          filters:
+            branches:
+              ignore:
+                - master
+                - py3-ci
+      - commit:
+          requires:
+            - build
+          filters:
+            branches:
+              only:
+                - /.*ci-commit-master.*/
+  build-python3:
+    jobs:
+      - build-py3.8:
+          filters:
+            branches:
+              only:
+                - py3-ci
+      - build-py3.6:
+          filters:
+            branches:
+              only:
+                - py3-ci

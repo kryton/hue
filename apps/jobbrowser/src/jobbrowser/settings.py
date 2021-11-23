@@ -14,13 +14,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-# Django settings for jobbrowser project.
-#
 
 DJANGO_APPS = ['jobbrowser']
 NICE_NAME = "Job Browser"
 REQUIRES_HADOOP = True
-DEPENDER_PACKAGE_YMLS = [
-    "static/js/package.yml",
-]
+ICON = "jobbrowser/art/icon_jobbrowser_48.png"
+MENU_INDEX = 30

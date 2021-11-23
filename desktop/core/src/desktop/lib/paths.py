@@ -24,17 +24,19 @@ import os
 
 """
 The project directory structure:
-    root/                               <-- Project root (build root, run root)
-        desktop/                        <-- Desktop root
-            apps/...
+    root/                                 <-- Project root (build root, run root)
+        apps/                             <-- Apps root
+            beeswax/
+        desktop/                          <-- Desktop root
             core/
-              src/desktop/lib/paths.py  <-- You're reading this file
-              ...
-            core-apps/...
+                src/desktop/lib/paths.py  <-- You're reading this file
+                ...
         ext/
             thirdparty/...
 """
 
+SAFE_CHARACTERS_URI = '~@#$&()*!+=:;,.?/\''
+SAFE_CHARACTERS_URI_COMPONENTS = '~@#$&()*!+=;,.\'' # Removing characters : / ? from safe list for KNOX
 
 def __get_root(*append):
   """
@@ -66,6 +68,13 @@ def get_desktop_root(*append):
   return __get_root("desktop", *append)
 
 
+def get_apps_root(*append):
+  """
+  Returns the directory for apps.
+  """
+  return __get_root("apps", *append)
+
+
 def get_thirdparty_root(*append):
   """
   Returns the ext/thirdparty directory.
@@ -78,3 +87,23 @@ def get_run_root(*append):
   Returns the run time root directory
   """
   return __get_root(*append)
+
+
+def get_hadoop_conf_dir_default_config():
+  from hadoop.conf import HDFS_CLUSTERS, get_hadoop_conf_dir_default
+  if list(HDFS_CLUSTERS.keys()):
+    yarn_site_path = HDFS_CLUSTERS[list(HDFS_CLUSTERS.keys())[0]].HADOOP_CONF_DIR.get()
+  else:
+    yarn_site_path = get_hadoop_conf_dir_default()
+  return yarn_site_path
+
+
+def get_config_root(*append):
+  """
+  Currently gets it based on the Hadoop configuration location.
+  """
+  return os.path.abspath(os.path.join(get_hadoop_conf_dir_default_config(), '..', *append))
+
+
+def get_config_root_hadoop(*append):
+  return os.path.abspath(os.path.join(get_hadoop_conf_dir_default_config(), *append))

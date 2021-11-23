@@ -19,23 +19,22 @@
 
 # May require download from PyPI or whereever
 DEVTOOLS += \
-	django-debug-toolbar \
-	ipdb \
-	ipython \
-	nose \
-	coverage \
-	nosetty \
-	threadframe \
-	werkzeug \
-	windmill
+	ipython[5.2.0] \
+	ipdb[0.10.3] \
+	nose[1.3.7] \
+	coverage[4.4.2] \
+	nosetty[0.4] \
+	werkzeug[0.14.1] \
+	windmill[1.6]
+
+PYPI_MIRROR ?= https://pypi.python.org/simple/
 
 # Install/download dev tools for SDK into the virtual environment
 .PHONY: $(DEVTOOLS)
 $(DEVTOOLS):
 	@echo "--- Installing development tool: $@"
-	@# Force downloads from pypi host - developer sites are sometimes dead!
-	$(ENV_EASY_INSTALL) -f http://archive.cloudera.com/desktop-sdk-python-packages/ \
-	   -H pypi.python.org,archive.cloudera.com $(SETUPTOOLS_OPTS) $@
+	$(ENV_EASY_INSTALL) -i $(PYPI_MIRROR) \
+	   -H *.cloudera.com,pypi.python.org,files.pythonhosted.org $(SETUPTOOLS_OPTS) $(subst ],,$(subst [,==,$@))
 
 $(BLD_DIR):
 	@mkdir -p $@

@@ -23,39 +23,14 @@ endif
 
 include $(ROOT)/Makefile.sdk
 
-###################################
-# Build Hadoop plugins
-###################################
-
-PLUGIN_DIR := $(realpath .)
-PLUGIN_JAVA_LIB := $(PLUGIN_DIR)/java-lib
-PLUGIN_JAVA_DIR := $(PLUGIN_DIR)/java
-PLUGIN := $(PLUGIN_JAVA_LIB)/hue-plugins-$(DESKTOP_VERSION).jar
-BLD_DIR_PLUGINS := $(PLUGIN_DIR)/build/java
-
-compile: $(PLUGIN)
-
-clean::
-	rm -Rf $(PLUGIN_JAVA_LIB)
-
-ifneq (,$(wildcard $(PLUGIN_JAVA_DIR)))
-PLUGIN_OPTS := -Dbuild.dir=$(BLD_DIR_PLUGINS) \
-	       -Dhadoop.home=$(HADOOP_HOME) \
-	       -Dplugins.version=$(DESKTOP_VERSION)
-
-$(PLUGIN): $(shell find $(PLUGIN_JAVA_DIR) )
-	mkdir -p $(PLUGIN_JAVA_LIB)
-	@echo "--- Building Hadoop plugins"
-	cd $(PLUGIN_JAVA_DIR) && ant $(ANT_OPTS) $(PLUGIN_OPTS) jar
-	cp $(BLD_DIR_PLUGINS)/$(notdir $(PLUGIN)) $(PLUGIN)
-else
-$(PLUGIN):
-	$(error Cannot build hadoop plugin without source)
-endif
+default::
+	@echo '  env-install    : Install into virtual-env'
 
 #
-# Tell the `bdist' target to exclude our java source.
+# env-install
+# 	Install app into the virtual environment.
 #
-BDIST_EXCLUDES += \
-	--exclude=java \
-	--exclude=regenerate-thrift.sh
+.PHONY: env-install
+env-install: compile ext-env-install
+	@echo '--- Installing $(APP_NAME) into virtual-env'
+	@$(ENV_PYTHON) setup.py develop -N -q

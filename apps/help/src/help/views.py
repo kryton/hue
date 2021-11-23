@@ -15,19 +15,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from desktop.lib.django_util import render, PopupException
+from future import standard_library
+standard_library.install_aliases()
+from builtins import str
+from desktop.lib.django_util import render
+from desktop.lib.exceptions_renderable import PopupException
 from desktop import appmanager
 from hadoop.fs import LocalSubFileSystem
 
 import markdown
-import urllib
+import urllib.request, urllib.parse, urllib.error
 import os
+import sys
+
+if sys.version_info[0] > 2:
+  open_file = open
+else:
+  open_file = file
 
 INDEX_FILENAMES = ("index.md", "index.html", "index.txt")
 
 def _unquote_path(path):
   """Normalizes paths."""
-  return urllib.unquote(path)
+  return urllib.parse.unquote(path)
 
 def get_help_fs(app_name):
   """
@@ -62,12 +72,16 @@ def view(request, app, path):
 
   if not fs.isfile(path):
     raise PopupException("Could not find or read the file: %s (app %s)" % (path, app))
-  
+
   content = fs.open(path, 'r').read()
+  if isinstance(content, bytes):
+    content = str(content, 'utf-8', errors='replace')
   if path.lower().endswith(".md"):
-    content = ('<div class="rendered-markdown">' +
+    content = ('<div class="print rendered-markdown">' +
                markdown.markdown(content, ['extra']) +
                '</div>')
+  elif path.lower().endswith(".html"):
+    content = '<div class="print">%s</div>' % (content,)
   else:
     # TODO(todd) escape content?
     content = '<pre>' + content + '</pre>'
@@ -75,7 +89,9 @@ def view(request, app, path):
   data = {
     'content': content,
     'apps': sorted([ x for x in appmanager.DESKTOP_MODULES if x.help_dir ],
-      key = lambda x: x.nice_name.lower()),
-    'title': appmanager.get_desktop_module(app).nice_name
+      key = lambda app: app.menu_index),
+    'title': appmanager.get_desktop_module(app).nice_name,
+    'current': app,
+    'is_embeddable': request.GET.get('is_embeddable', False),
   }
   return render("display.mako", request, data)

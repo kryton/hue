@@ -15,43 +15,100 @@
 ## limitations under the License.
 <%!
 import datetime
-from django.template.defaultfilters import urlencode, escape
+import sys
+from desktop.lib.paths import SAFE_CHARACTERS_URI_COMPONENTS
+
+from django.template.defaultfilters import urlencode, stringformat, date, filesizeformat, time
+from django.utils.translation import ugettext as _
+
+from aws.conf import get_default_region
+
+if sys.version_info[0] > 2:
+  from urllib.parse import quote as urllib_quote
+else:
+  from urllib import quote as urllib_quote
 %>
-<%def name="header(path, current_request_path=False, toolbar=True, cwd_set=True)">
-  <html>
-    <head>
-      <title>${path}</title>
-    </head>
-    <body>
 
-      % if toolbar:
-      <div class="toolbar">
-
-        <a href="${url('filebrowser.views.view', path='/')}"><img src="/filebrowser/static/art/icon_large.png" class="fb_icon"/></a>
-        % if current_request_path:
-          <div class="fb-actions ccs-button_bar">
-            % if home_directory:
-              <a class="fb-home ccs-art_button" data-icon-styles="{'width' : 16, 'height': 16}" href="${url('filebrowser.views.view', path=home_directory)}">My Home</a>
-            % endif
-            % if cwd_set:
-              <a class="fb-upload ccs-art_button" data-icon-styles="{'width' : 16, 'height': 16}" href="${url('filebrowser.views.upload')}?dest=${path|urlencode}&next=${current_request_path|urlencode}">Upload a File</a>
-              <a class="fb-mkdir ccs-art_button" data-icon-styles="{'width' : 16, 'height': 16}" href="${url('filebrowser.views.mkdir')}?path=${path|urlencode}&next=${current_request_path|urlencode}">New Directory</a>
-            % endif
-          </div>
+<%def name="breadcrumbs(path, breadcrumbs, from_listdir=False)">
+    % if from_listdir:
+      <ul class="nav nav-pills hue-breadcrumbs-bar">
+        %if path.lower().find('s3a://') == 0:
+          <li style="padding-top: 10px">
+            <span class="breadcrumb-link homeLink" title="${ _('S3 region %s') % get_default_region() }">
+              <i class="fa fa-fw fa-cubes"></i> ${ get_default_region() }
+            </span>
+          </li>
+        %elif path.lower().find('adl:/') == 0:
+          <li style="padding-top: 12px">
+            <span class="breadcrumb-link homeLink">
+              <svg class="hi"><use xlink:href='#hi-adls'></use></svg>
+            </span>
+          </li>
+        %elif path.lower().find('abfs://') == 0:
+          <li style="padding-top: 12px">
+            <span class="breadcrumb-link homeLink">
+              <svg class="hi"><use xlink:href='#hi-adls'></use></svg>
+            </span>
+          </li>
+        %else:
+          <li><a class="pointer breadcrumb-link homeLink" data-bind="click: $root.openHome, attr:{'href': window.HUE_BASE_URL + '/filebrowser/view=${ urllib_quote(path.encode('utf-8'), safe=SAFE_CHARACTERS_URI_COMPONENTS) }?default_to_home'}">
+            <i class="fa fa-home"></i> ${_('Home')}</a>
+          </li>
+        %endif
+        <li>
+          <ul id="editBreadcrumb" class="hue-breadcrumbs editable-breadcrumbs" data-bind="foreach: breadcrumbs" style="padding-right:40px; padding-top: 12px" title="${_('Edit path')}">
+            <li data-bind="visible: label.slice(-1) == '/'">
+              <a data-bind="click: show, attr: {'href': '${url('filebrowser.views.view', path=urlencode(''))}' + url}"><span class="divider" data-bind="text: label"></span></a>
+            </li>
+            <li data-bind="visible: label.slice(-1) != '/'">
+              <a data-bind="text: label, click: show, attr: {'href': '${url('filebrowser.views.view', path=urlencode(''))}' + url}"></a><span class="divider">/</span>
+            </li>
+          </ul>
+          <input id="hueBreadcrumbText" type="text" style="display:none" data-bind="value: currentPath" autocomplete="off" class="input-xxlarge" />
+        </li>
+        % if is_trash_enabled:
+        <li class="pull-right">
+          <a class="pointer breadcrumb-link trashLink" data-bind="click: $root.openTrash, attr:{'href': window.HUE_BASE_URL + '/filebrowser/view=${ urllib_quote(path.encode('utf-8'), safe=SAFE_CHARACTERS_URI_COMPONENTS) }?default_to_trash'}" title="${_('View trash')}">
+            <i class="fa fa-trash-o"></i> ${_('Trash')}
+          </a>
+        </li>
         % endif
-      </div>
-      % endif
+      </ul>
+    % else:
+      <ul class="nav nav-pills hue-breadcrumbs-bar">
+        <li><a data-bind="hueLink: window.HUE_BASE_URL + '/filebrowser/view=${ urllib_quote(path.encode('utf-8'), safe=SAFE_CHARACTERS_URI_COMPONENTS) }?default_to_home'" class="breadcrumb-link homeLink"><i class="fa fa-home"></i> ${_('Home')}</a></li>
+        <li>
+          <ul class="hue-breadcrumbs" style="padding-right:40px; padding-top: 12px">
+          % for breadcrumb_item in breadcrumbs:
+            <% label, f_url = breadcrumb_item['label'], breadcrumb_item['url'] %>
+            %if label[-1] == '/':
+            <li><a data-bind="hueLink: '${'/filebrowser/view=' + f_url}'"><span class="divider">${label}</span></a></li>
+            %else:
+            <li><a data-bind="hueLink: '${'/filebrowser/view=' + f_url}'">${label}</a><span class="divider">/</span></li>
+            %endif
+          % endfor
+          </ul>
+        </li>
+      </ul>
+    % endif
 </%def>
 
-<%def name="footer()">
-      <div class="fb-uploader ccs-hidden">
-        <a class="fb-cancel-upload">Close</a>
-        <ul class="fb-upload-list"></ul>
 
-        <div class="fb-noflash">If you are experiencing flash errors due to uploading,
-          you can <a target="ccs_upload" href="${ url('filebrowser.views.upload') }">upload without flash</a>.
+<%def name="menubar()">
+  <div class="navbar hue-title-bar nokids">
+      <div class="navbar-inner">
+        <div class="container-fluid">
+          <div class="nav-collapse">
+            <ul class="nav">
+              <li class="app-header">
+                <a href="/filebrowser/">
+                  <img src="${ static('filebrowser/art/icon_filebrowser_48.png') }" class="app-icon" alt="${ _('File browser icon') }" />
+                  ${ _('File Browser') }
+                </a>
+              </li>
+            </ul>
+          </div>
         </div>
       </div>
-    </body>
-  </html>
+  </div>
 </%def>

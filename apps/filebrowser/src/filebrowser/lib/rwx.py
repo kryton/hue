@@ -17,6 +17,7 @@
 #
 # Utilities for dealing with file modes.
 
+from builtins import zip
 import stat
 
 def filetype(mode):
@@ -47,10 +48,11 @@ def rwxtype(mode):
 
 BITS = (stat.S_IRUSR, stat.S_IWUSR, stat.S_IXUSR,
     stat.S_IRGRP, stat.S_IWGRP, stat.S_IXGRP,
-    stat.S_IROTH, stat.S_IWOTH, stat.S_IXOTH)
+    stat.S_IROTH, stat.S_IWOTH, stat.S_IXOTH,
+    stat.S_ISVTX)
 
 def expand_mode(mode):
-  return map(lambda y: bool(mode & y), BITS)
+  return [bool(mode & y) for y in BITS]
 
 def compress_mode(tup):
   mode = 0
@@ -59,7 +61,7 @@ def compress_mode(tup):
       mode += n
   return mode
 
-def rwx(mode):
+def rwx(mode, aclBit=False):
   """
   Returns "rwx"-style string like that ls would give you.
 
@@ -67,9 +69,11 @@ def rwx(mode):
   this is similar in spirit to the google-able "pathinfo.py".
   """
   bools = expand_mode(mode)
-  s = list("rwxrwxrwx")
-  for (i, v) in enumerate(bools):
+  s = list("rwxrwxrwxt")
+  for (i, v) in enumerate(bools[:-1]):
     if not v:
       s[i] = "-"
-  return rwxtype(mode) + "".join(s)
-
+  # Sticky bit should either be 't' or no char.
+  if not bools[-1]:
+    s = s[:-1]
+  return rwxtype(mode) + "".join(s) + ('+' if aclBit else '')

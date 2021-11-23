@@ -18,13 +18,17 @@
 Common utilities for testing Desktop django apps.
 """
 
-import django.test.client
-import simplejson
-from django.contrib.auth.models import User, Group
-
-import re
-import nose.tools
 import logging
+import re
+import json
+
+import django.test.client
+import nose.tools
+
+from useradmin.models import User, Group, default_organization
+
+from desktop.conf import ENABLE_ORGANIZATIONS
+
 
 class Client(django.test.client.Client):
   """
@@ -32,7 +36,7 @@ class Client(django.test.client.Client):
   """
   def get_json(self, *args, **kwargs):
     response = self.get(*args, **kwargs)
-    return simplejson.JSONDecoder().decode(response.content)
+    return json.JSONDecoder().decode(response.content)
 
 def assert_ok_response(response):
   """
@@ -40,10 +44,10 @@ def assert_ok_response(response):
 
   Returns the response.
   """
-  assert_true(200, response.status_code)
-  return reponse
+  nose.tools.assert_true(200, response.status_code)
+  return response
 
-def make_logged_in_client(username="test", password="test", is_superuser=True, recreate=False):
+def make_logged_in_client(username="test", password="test", is_superuser=True, recreate=False, groupname=None):
   """
   Create a client with a user already logged in.
 
@@ -55,10 +59,24 @@ def make_logged_in_client(username="test", password="test", is_superuser=True, r
     if recreate:
       user.delete()
       raise User.DoesNotExist
-  except User.DoesNotExist:    
+  except User.DoesNotExist:
     user = User.objects.create_user(username, username + '@localhost', password)
     user.is_superuser = is_superuser
     user.save()
+  else:
+    if user.is_superuser != is_superuser:
+      user.is_superuser = is_superuser
+      user.save()
+
+  if groupname is not None:
+    group_attrs = {'name': groupname}
+    if ENABLE_ORGANIZATIONS.get():
+      group_attrs['organization'] = default_organization()
+
+    group, created = Group.objects.get_or_create(**group_attrs)
+    if not user.groups.filter(name=group.name).exists():
+      user.groups.add(group)
+      user.save()
 
   c = Client()
   ret = c.login(username=username, password=password)
@@ -74,12 +92,12 @@ def compact_whitespace(s):
   Also removes leading and trailing whitespce.
   """
   return _MULTI_WHITESPACE.sub(" ", s).strip()
-  
+
 def assert_equal_mod_whitespace(first, second, msg=None):
   """
   Asserts that two strings are equal, ignoring whitespace.
   """
-  nose.tools.assert_equal(compact_whitespace(first), 
+  nose.tools.assert_equal(compact_whitespace(first),
     compact_whitespace(second), msg)
 
 def assert_similar_pages(first, second, ratio=0.9, msg=None):
@@ -113,20 +131,8 @@ def create_tables(model):
 
   This is a subset of django.core.management.commands.syncdb
   """
-  from django.core.management import sql
   from django.db import connection
-  from django.core.management.color import no_style
+  from django.db.models import Model
 
-  cursor = connection.cursor()
-  def execute(statements):
-    for statement in statements:
-      logging.debug("Executing: " + statement)
-      cursor.execute(statement)
-
-  STYLE = no_style()
-  execute(connection.creation.sql_create_model(model, STYLE)[0])
-  execute(connection.creation.sql_indexes_for_model(model, STYLE))
-  # Skipping custom sql and many-to-many, since those rely on 
-  # loading the app modules.
-  # execute(sql.custom_sql_for_model(model, STYLE))
-  # execute(connection.creation.sql_for_many_to_many(model, STYLE))
+  with connection.schema_editor() as editor:
+    editor.create_model(model)

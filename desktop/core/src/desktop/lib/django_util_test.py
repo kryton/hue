@@ -16,7 +16,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import datetime
+import sys
 
 from nose.tools import assert_true, assert_equal, assert_not_equal, assert_raises
 from django.http import HttpResponse, HttpResponseRedirect
@@ -25,16 +27,19 @@ from desktop.lib.django_test_util import configure_django_for_test, create_table
 from desktop.lib.django_util import reverse_with_get, timesince, humanize_duration
 configure_django_for_test()
 
-from desktop.lib import django_util
+from desktop.lib import django_util, exceptions
 from django.db import models
 
+if sys.version_info[0] > 2:
+  unichr = chr
+
 class TestModel(models.Model):
-  class Meta:
+  class Meta(object):
     app_label = "TEST_APP"
 
   my_int = models.IntegerField()
   my_str = models.TextField(max_length=100)
-  last_modified = models.DateField(auto_now=True)
+  last_modified = models.DateTimeField(auto_now=True)
 
 class TestDjangoUtil(object):
   def test_update_if_dirty(self):
@@ -68,9 +73,9 @@ class TestDjangoUtil(object):
     assert_equal('File Browser', django_util.get_app_nice_name('filebrowser'))
 
   def test_encode_json_model(self):
-    assert_equal('{"pk": null, "model": "TEST_APP.testmodel", "fields": {"last_modified": null, "my_str": "foo", "my_int": 3}}',
+    assert_equal('{"model": "TEST_APP.testmodel", "pk": null, "fields": {"my_int": 3, "my_str": "foo", "last_modified": null}}',
         django_util.encode_json(TestModel(my_int=3, my_str="foo")))
-    assert_equal('[{"pk": null, "model": "TEST_APP.testmodel", "fields": {"last_modified": null, "my_str": "foo", "my_int": 3}}]',
+    assert_equal('[{"model": "TEST_APP.testmodel", "pk": null, "fields": {"my_int": 3, "my_str": "foo", "last_modified": null}}]',
         django_util.encode_json([TestModel(my_int=3, my_str="foo")]))
   
   def test_timesince(self):
@@ -106,7 +111,7 @@ class TestDjangoUtil(object):
         return "foo"
     assert_equal('"foo"', django_util.encode_json(Foo()))
     assert_equal('["foo", "foo"]', django_util.encode_json([Foo(), Foo()]))
-    assert_equal('{"pk": null, "model": "TEST_APP.testmodel", "fields": {"last_modified": null, "my_str": "foo", "my_int": 3}}',
+    assert_equal('{"model": "TEST_APP.testmodel", "pk": null, "fields": {"my_int": 3, "my_str": "foo", "last_modified": null}}',
         django_util.encode_json(TestModel(my_int=3, my_str="foo")))
 
     class Bar(object):
@@ -135,8 +140,8 @@ class TestDjangoUtil(object):
     msg = "b0rked file"
     the_file = "foobar"
     try:
-      raise django_util.MessageException(msg, the_file)
-    except Exception, e:
+      raise exceptions.MessageException(msg, the_file)
+    except Exception as e:
       assert_equal(msg, e.message)
       assert_equal(the_file, e.data['filename'])
       assert_true(msg in str(e))
@@ -160,16 +165,19 @@ def test_popup_injection():
 
 def test_reverse_with_get():
   # Basic view
-  assert_equal("/", reverse_with_get("desktop.views.index"))
+  assert_equal("/", reverse_with_get("desktop_views.index"))
   # Arguments for the view
-  assert_equal("/prefs/foo", reverse_with_get("desktop.views.prefs", kwargs=dict(key="foo")))
+  assert_equal("/desktop/api2/user_preferences/foo", reverse_with_get("desktop.api2.user_preferences", kwargs=dict(key="foo")))
   # Arguments for the view as well as GET parameters
-  assert_equal("/prefs/foo?a=1&b=2",
-    reverse_with_get("desktop.views.prefs", kwargs=dict(key="foo"), get=dict(a=1,b=2)))
+  assert_equal("/desktop/api2/user_preferences/foo?a=1&b=2",
+    reverse_with_get("desktop.api2.user_preferences", kwargs=dict(key="foo"), get=dict(a=1,b=2)))
   # You can use a list of args instead of kwargs, too
-  assert_equal("/prefs/foo?a=1&b=2",
-    reverse_with_get("desktop.views.prefs", args=["foo"], get=dict(a=1,b=2)))
+  assert_equal("/desktop/api2/user_preferences/foo?a=1&b=2",
+    reverse_with_get("desktop.api2.user_preferences", args=["foo"], get=dict(a=1,b=2)))
   # Just GET parameters
-  assert_equal("/?a=1", reverse_with_get("desktop.views.index", get=dict(a="1")))
+  assert_equal("/?a=1", reverse_with_get("desktop_views.index", get=dict(a="1")))
   # No GET parameters
-  assert_equal("/", reverse_with_get("desktop.views.index", get=dict()))
+  assert_equal("/", reverse_with_get("desktop_views.index", get=dict()))
+
+def test_unicode_ok():
+  assert_equal("/?a=x%C3%A9", reverse_with_get("desktop_views.index", get=dict(a="x" + unichr(233))))
